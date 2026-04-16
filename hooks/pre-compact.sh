@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+export PATH="/opt/homebrew/bin:$PATH"
 # Backs up the session transcript before compaction (auto or manual).
 # Runs async so it never delays the compaction itself.
 # Keeps the 20 most recent backups and prunes the rest.

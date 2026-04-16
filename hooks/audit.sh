@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+export PATH="/opt/homebrew/bin:$PATH"
 # Central audit log. Handles:
 #   PostToolUse      — file edits/writes (async)
 #   PostToolUseFailure — failed tool calls (async)

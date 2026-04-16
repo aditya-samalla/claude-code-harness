@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+export PATH="/opt/homebrew/bin:$PATH"
 # Blocks bash commands that would print or transmit env variable values.
 # Returns a JSON decision — "block" halts the tool call, "allow" lets it proceed.
 

@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+export PATH="/opt/homebrew/bin:$PATH"
 # Blocks Read/Edit/Write tool calls targeting .env files and credentials.
 
 INPUT=$(cat)

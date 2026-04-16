@@ -25,4 +25,4 @@ for P in "${BLOCKED[@]}"; do
   fi
 done
 
-echo '{"decision": "allow"}'
+exit 0

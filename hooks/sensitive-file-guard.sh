@@ -6,7 +6,7 @@ INPUT=$(cat)
 FILE=$(printf '%s\n' "$INPUT" | jq -r '.tool_input.file_path // .tool_input.path // ""')
 
 if [[ -z "$FILE" ]]; then
-  echo '{"decision": "allow"}'; exit 0
+  exit 0
 fi
 
 BLOCKED=(
@@ -32,4 +32,4 @@ for P in "${BLOCKED[@]}"; do
   fi
 done
 
-echo '{"decision": "allow"}'
+exit 0

@@ -70,6 +70,10 @@
       {
         "matcher": "Read|Edit|Write",
         "hooks": [{ "type": "command", "command": "~/.claude/hooks/sensitive-file-guard.sh" }]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [{ "type": "command", "command": "~/.claude/hooks/git-guard.sh" }]
       }
     ],
     "PostToolUse": [

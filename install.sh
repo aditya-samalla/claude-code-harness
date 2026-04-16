@@ -12,7 +12,7 @@ mkdir -p ~/.claude/hooks ~/.claude/logs ~/.claude/transcripts
 echo "  ✓ directories"
 
 # Hooks
-HOOKS=(env-guard.sh sensitive-file-guard.sh audit.sh notify.sh session-start.sh pre-compact.sh)
+HOOKS=(env-guard.sh sensitive-file-guard.sh git-guard.sh audit.sh notify.sh session-start.sh pre-compact.sh)
 for f in "${HOOKS[@]}"; do
   cp "$REPO/hooks/$f" ~/.claude/hooks/"$f"
   chmod +x ~/.claude/hooks/"$f"

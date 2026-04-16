@@ -1,26 +1,50 @@
 #!/usr/bin/env bash
-export PATH="/opt/homebrew/bin:$PATH"
-# Blocks bash commands that would print or transmit env variable values.
-# Returns a JSON decision — "block" halts the tool call, "allow" lets it proceed.
+# Blocks bash commands that would print, read, or transmit env variable values
+# and dotfile secrets. All patterns are anchored to command boundaries
+# (line start, pipe, chain, heredoc, $(…), backticks) so that occurrences
+# inside commit messages, single-quoted strings, and literal arguments to
+# unrelated programs do not false-positive.
+source "$(dirname "$0")/lib.sh"
 
-INPUT=$(cat)
-CMD=$(printf '%s\n' "$INPUT" | jq -r '.tool_input.command // ""')
+read_input
+CMD=$(jq_get '.tool_input.command')
+[[ -z "$CMD" ]] && exit 0
+
+# Command boundary: start-of-line, pipe, logical chain, subshell, semicolon, &.
+A='(^|[|&;]|&&|\|\||\$\(|`)\s*'
+
+# Readers / dumpers targeting .env* or ~/.aws/credentials or ~/.netrc.
+READERS='(cat|less|more|head|tail|xxd|od|strings|nl|awk|sed|grep|rg|base64|gpg|openssl\s+enc|source)'
+# Bash dot-source shortcut: `. <file>`
+DOTSOURCE='\.'
+DOTFILES='(\.env(\b|\.)|\.envrc\b|\.aws/credentials|\.netrc\b|id_rsa\b|id_ed25519\b|\.pem\b|\.key\b)'
+
+# Env dumpers (whole-command or chained).
+ENV_DUMP='(printenv|^env$|^env\b[^=]*$|^export\s*$|^set\s*$|declare\s+-(p|x)\b|compgen\s+-e)'
+
+# curl/wget exfil: body/data flags OR URL containing a KEY/TOKEN/SECRET/PASSWORD-ish var expansion.
+NET_EXFIL_BODY='(curl|wget)\b[^|;&]*(--data-binary|--data-urlencode|--data|--data-raw|-d\b|-F\b|--form|--upload-file|--post-data|-T\b)'
+NET_EXFIL_VAR='(curl|wget)\b[^|;&]*\$\{?[A-Z_]*(TOKEN|KEY|SECRET|PASSWORD|PASSWD|API|AUTH)'
+
+# Sockets.
+SOCKETS='\b(nc|ncat|socat)\b'
+
+# Eval / indirect execution of env-dumping content.
+EVAL_ENV='\beval\b[^|;&]*\$\(.*(printenv|env\b|cat\b)'
 
 BLOCKED=(
-  'cat.*\.env'
-  'echo.*\$(.*KEY\|.*TOKEN\|.*SECRET\|.*PASSWORD)'
-  '\bprintenv\b'
-  '^env$'
-  'curl.*\$[A-Z_]*TOKEN'
-  'curl.*\$[A-Z_]*KEY'
+  "${A}${READERS}\s+[^|;&]*${DOTFILES}"
+  "${A}${DOTSOURCE}\s+[^|;&]*${DOTFILES}"
+  "${A}${ENV_DUMP}"
+  "${A}${NET_EXFIL_BODY}"
+  "${A}${NET_EXFIL_VAR}"
+  "${A}${SOCKETS}"
+  "${A}${EVAL_ENV}"
 )
 
 for P in "${BLOCKED[@]}"; do
-  if printf '%s\n' "$CMD" | grep -qiE "$P"; then
-    echo '{
-      "decision": "block",
-      "reason": "Blocked: command may expose sensitive env values. Reference variables by name in code only — do not print or transmit their values."
-    }'
+  if printf '%s\n' "$CMD" | grep -qE "$P"; then
+    emit_deny "Blocked: command may read or exfiltrate sensitive env values / dotfiles. Reference variables by name in code; do not print, dump, or transmit their values."
     exit 0
   fi
 done

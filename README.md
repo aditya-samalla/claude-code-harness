@@ -11,18 +11,33 @@ cd claude-code-harness
 bash install.sh
 ```
 
+The installer:
+- Merges into any existing `~/.claude/settings.json` (user keys preserved, allow/deny lists unioned, hooks owned by harness).
+- Backs up the previous file as `settings.json.bak.<timestamp>`.
+- Runs `doctor.sh` to verify every hook after install.
+
 Then open Claude Code and run `/hooks` to confirm everything is registered.
 
 ## What it does
 
-### Security (blocking)
+### Security — hard block (`deny`)
 
 | Hook | Event | Behaviour |
 |---|---|---|
-| `env-guard` | PreToolUse → Bash | Blocks commands that would print or transmit env variable values |
-| `sensitive-file-guard` | PreToolUse → Read/Edit/Write | Blocks access to `.env`, `*.pem`, `*.key`, credential files |
+| `env-guard` | PreToolUse → Bash | Blocks commands that read, dump, or exfiltrate env values or dotfiles (`cat .env`, `printenv`, `curl --data @creds`, `nc`, `eval $(env)`, etc.) |
+| `sensitive-file-guard` | PreToolUse → Read/Edit/Write | Blocks access to `.env*`, `*.pem`, `*.key`, SSH keys, AWS credentials. Resolves symlinks so a symlinked path can't bypass. |
+| `git-guard` | PreToolUse → Bash | Denies force-push, `.git/hooks` writes, `core.hooksPath` tampering, `filter-branch`, broad `git add` |
+| `interpreter-guard` | PreToolUse → Bash | Denies `python -c` / `node -e` / `ruby -e` / `bash -c` etc. when the inline code references env vars, dotfiles, sockets, or subprocess APIs. Closes the interpreter-bypass route. |
+| `network-guard` | PreToolUse → Bash, WebFetch | Denies file-body uploads via `curl -d @…`, `-F @…`, `-T` |
+| `secret-scanner` | PreToolUse → Write/Edit/MultiEdit | Scans the payload before it hits disk; denies AWS keys, JWTs, PEM blocks, GitHub/Slack/Stripe/Google/Anthropic/OpenAI tokens |
 
-These return a JSON `deny` decision — Claude sees the reason and cannot proceed.
+### Security — prompt user (`ask`)
+
+| Hook | Triggers |
+|---|---|
+| `git-guard` | `git push --delete`, `git push origin :branch`, `git remote set-url`, `git config user.email`, glob staging (`git add '*.ts'`) |
+| `interpreter-guard` | Long inline scripts with no obvious sensitive token |
+| `network-guard` | `curl -X POST/PUT/PATCH/DELETE` (any host), `curl`/`wget`/`WebFetch` to non-allowlisted domain |
 
 ### Audit (async, non-blocking)
 
@@ -33,7 +48,7 @@ These return a JSON `deny` decision — Claude sees the reason and cannot procee
 | `audit` | ConfigChange | Logs any settings file modified mid-session |
 | `audit` | Stop | Logs session turn count and cost on exit |
 
-All entries go to `~/.claude/logs/audit.log`. Format: `timestamp | event | detail | cwd`.
+All entries go to `~/.claude/logs/audit.log` (`0600` perms, rotated at 10 MB, 5 backups retained).
 
 ### Context & continuity
 
@@ -43,30 +58,57 @@ All entries go to `~/.claude/logs/audit.log`. Format: `timestamp | event | detai
 | `pre-compact` | PreCompact | Backs up the full session transcript before compaction. Keeps last 20. |
 | `notify` | Notification | Desktop alert when Claude needs input (async) |
 
-### Settings
+### Settings shipped
 
 | Setting | Value | Effect |
 |---|---|---|
-| `checkpointingEnabled` | `true` | Automatic git checkpoint before large changes — easy rollback |
-| `includeCoAuthoredBy` | `true` | Adds `Co-authored-by: Claude` to commits. Set `false` to disable. |
+| `checkpointingEnabled` | `true` | Git checkpoint before large changes |
+| `includeCoAuthoredBy` | `true` | Adds `Co-authored-by: Claude` to commits |
+| `permissions.allow` | Scoped allowlist (≈60 entries) | Covers common safe ops: `npm test/run lint/build`, `pytest`, `cargo test`, `go test`, `ls`, `grep`, `git status`, etc. No wildcards like `Bash(python:*)` — those would let Claude bypass every guard. |
+| `permissions.deny` | `git push --force`, `sudo`, `rm -rf`, `gh auth token`, … | Deny always wins over allow |
 
 ## File layout after install
 
 ```
 ~/.claude/
-  settings.json          ← global config (installed from this repo)
+  settings.json          ← merged with harness defaults (user keys preserved)
   hooks/
+    lib.sh               ← shared helpers (emit_deny, emit_ask, log_audit, …)
     env-guard.sh
     sensitive-file-guard.sh
+    git-guard.sh
+    interpreter-guard.sh
+    network-guard.sh
+    secret-scanner.sh
     audit.sh
     notify.sh
     session-start.sh
     pre-compact.sh
   logs/
-    audit.log            ← append-only audit trail
+    audit.log            ← append-only audit trail, 0600, rotated
   transcripts/
-    transcript_auto_20260415_143022.jsonl   ← pre-compaction backups
+    transcript_auto_20260415_143022.jsonl
     ...
+```
+
+## Testing the harness
+
+```bash
+bash doctor.sh
+```
+
+Runs every test in `tests/*.test.sh` and prints a summary. The full suite covers 170+ cases across all 6 guards, including known bypass attempts (symlinked dotfiles, quoted paths, commit messages containing trigger strings, interpreter inline-code escapes, file-upload shapes, and mutating HTTP methods).
+
+## Customization
+
+**Extend the network allowlist per-project:**
+```json
+{ "env": { "CLAUDE_NET_ALLOWLIST": "internal.example.com api.myservice.io" } }
+```
+
+**Point the audit log elsewhere:**
+```json
+{ "env": { "CLAUDE_AUDIT_LOG": "~/logs/claude.log" } }
 ```
 
 ## Per-project additions (not in this harness)

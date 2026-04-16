@@ -1,13 +1,14 @@
 #!/usr/bin/env bash
-export PATH="/opt/homebrew/bin:$PATH"
 # Blocks Read/Edit/Write tool calls targeting .env files and credentials.
+source "$(dirname "$0")/lib.sh"
 
-INPUT=$(cat)
-FILE=$(printf '%s\n' "$INPUT" | jq -r '.tool_input.file_path // .tool_input.path // ""')
+read_input
+FILE=$(jq_get '.tool_input.file_path')
+[[ -z "$FILE" ]] && FILE=$(jq_get '.tool_input.path')
+[[ -z "$FILE" ]] && exit 0
 
-if [[ -z "$FILE" ]]; then
-  exit 0
-fi
+# Canonicalize to defeat symlink / /private/var bypass attempts.
+CANON=$(canonical_path "$FILE")
 
 BLOCKED=(
   '(^|/)\.env$'
@@ -23,11 +24,8 @@ BLOCKED=(
 )
 
 for P in "${BLOCKED[@]}"; do
-  if printf '%s\n' "$FILE" | grep -qE "$P"; then
-    echo "{
-      \"decision\": \"block\",
-      \"reason\": \"Blocked: $FILE is a sensitive credentials file. Read env values from process.env in code — do not open the file directly.\"
-    }"
+  if printf '%s\n' "$FILE" | grep -qE "$P" || printf '%s\n' "$CANON" | grep -qE "$P"; then
+    emit_deny "Blocked: $FILE is a sensitive credentials file. Read env values from process.env in code — do not open the file directly."
     exit 0
   fi
 done

@@ -1,16 +1,16 @@
 #!/usr/bin/env bash
-export PATH="/opt/homebrew/bin:$PATH"
 # Backs up the session transcript before compaction (auto or manual).
-# Runs async so it never delays the compaction itself.
 # Keeps the 20 most recent backups and prunes the rest.
+source "$(dirname "$0")/lib.sh"
 
-INPUT=$(cat)
-TRANSCRIPT=$(echo "$INPUT" | jq -r '.transcript_path // ""')
-TRIGGER=$(echo "$INPUT"    | jq -r '.trigger // "unknown"')
+read_input
+TRANSCRIPT=$(jq_get '.transcript_path')
+TRIGGER=$(jq_get '.trigger')
+[[ -z "$TRIGGER" ]] && TRIGGER="unknown"
 
 [[ -z "$TRANSCRIPT" || ! -f "$TRANSCRIPT" ]] && exit 0
 
-BACKUP_DIR="${CLAUDE_TRANSCRIPT_DIR:-$HOME/.claude/transcripts}"
+BACKUP_DIR=$(expand_tilde "${CLAUDE_TRANSCRIPT_DIR:-$HOME/.claude/transcripts}")
 mkdir -p "$BACKUP_DIR"
 
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)

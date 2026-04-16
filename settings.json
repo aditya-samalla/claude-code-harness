@@ -26,21 +26,49 @@
       "Bash(gh issue:*)",
       "Bash(gh repo:*)",
       "Bash(gh auth status:*)",
-      "Bash(npm:*)",
-      "Bash(npx:*)",
-      "Bash(node:*)",
-      "Bash(python:*)",
-      "Bash(pip:*)",
+      "Bash(npm test:*)",
+      "Bash(npm run test:*)",
+      "Bash(npm run lint:*)",
+      "Bash(npm run build:*)",
+      "Bash(npm run typecheck:*)",
+      "Bash(npm run dev:*)",
+      "Bash(npm ci)",
+      "Bash(pnpm test:*)",
+      "Bash(pnpm lint:*)",
+      "Bash(pnpm build:*)",
+      "Bash(pnpm install)",
+      "Bash(yarn test:*)",
+      "Bash(yarn lint:*)",
+      "Bash(yarn build:*)",
+      "Bash(pytest:*)",
+      "Bash(ruff:*)",
+      "Bash(mypy:*)",
+      "Bash(black:*)",
+      "Bash(cargo build:*)",
+      "Bash(cargo test:*)",
+      "Bash(cargo clippy:*)",
+      "Bash(cargo fmt:*)",
+      "Bash(go test:*)",
+      "Bash(go build:*)",
+      "Bash(go vet:*)",
       "Bash(ls:*)",
       "Bash(cat:*)",
       "Bash(find:*)",
       "Bash(grep:*)",
+      "Bash(rg:*)",
       "Bash(mkdir:*)",
       "Bash(cp:*)",
       "Bash(mv:*)",
       "Bash(echo:*)",
-      "Bash(curl:*)",
-      "Bash(jq:*)"
+      "Bash(jq:*)",
+      "Bash(which:*)",
+      "Bash(head:*)",
+      "Bash(tail:*)",
+      "Bash(wc:*)",
+      "Bash(sort:*)",
+      "Bash(uniq:*)",
+      "Bash(tr:*)",
+      "Bash(diff:*)"
     ],
     "deny": [
       "Bash(git push --force:*)",
@@ -52,7 +80,9 @@
       "Bash(git branch -d:*)",
       "Bash(gh auth token:*)",
       "Bash(sudo:*)",
-      "Bash(rm -rf:*)"
+      "Bash(rm -rf:*)",
+      "Bash(rm -rf /:*)",
+      "Bash(chmod -R 777:*)"
     ]
   },
   "hooks": {
@@ -65,15 +95,24 @@
     "PreToolUse": [
       {
         "matcher": "Bash",
-        "hooks": [{ "type": "command", "command": "~/.claude/hooks/env-guard.sh" }]
+        "hooks": [
+          { "type": "command", "command": "~/.claude/hooks/env-guard.sh" },
+          { "type": "command", "command": "~/.claude/hooks/git-guard.sh" },
+          { "type": "command", "command": "~/.claude/hooks/interpreter-guard.sh" },
+          { "type": "command", "command": "~/.claude/hooks/network-guard.sh" }
+        ]
       },
       {
         "matcher": "Read|Edit|Write",
         "hooks": [{ "type": "command", "command": "~/.claude/hooks/sensitive-file-guard.sh" }]
       },
       {
-        "matcher": "Bash",
-        "hooks": [{ "type": "command", "command": "~/.claude/hooks/git-guard.sh" }]
+        "matcher": "Write|Edit|MultiEdit",
+        "hooks": [{ "type": "command", "command": "~/.claude/hooks/secret-scanner.sh" }]
+      },
+      {
+        "matcher": "WebFetch",
+        "hooks": [{ "type": "command", "command": "~/.claude/hooks/network-guard.sh" }]
       }
     ],
     "PostToolUse": [

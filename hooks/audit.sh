@@ -1,37 +1,42 @@
 #!/usr/bin/env bash
-export PATH="/opt/homebrew/bin:$PATH"
 # Central audit log. Handles:
 #   PostToolUse      — file edits/writes (async)
 #   PostToolUseFailure — failed tool calls (async)
 #   ConfigChange     — settings file modified mid-session (async)
 #   Stop             — session summary (blocking, so cost is captured before exit)
+source "$(dirname "$0")/lib.sh"
 
-LOG="${CLAUDE_AUDIT_LOG:-$HOME/.claude/logs/audit.log}"
-mkdir -p "$(dirname "$LOG")"
-
-INPUT=$(cat)
-EVENT=$(echo "$INPUT" | jq -r '.hook_event_name // "unknown"')
+read_input
+EVENT=$(jq_get '.hook_event_name')
+[[ -z "$EVENT" ]] && EVENT="unknown"
 TS=$(date -u +%Y-%m-%dT%H:%M:%SZ)
 DIR=$(pwd)
 
+# Collapse newlines, tabs, and control chars to single spaces so one log
+# line stays on one line even if the source field contains raw stderr.
+sanitize() {
+  printf '%s' "$1" | tr '\n\r\t' '   ' | tr -d '\000-\037' | head -c 200
+}
+
 case "$EVENT" in
   Stop)
-    TURNS=$(echo "$INPUT" | jq -r '.num_turns // "?"')
-    COST=$(echo "$INPUT"  | jq -r '.usage.total_cost_usd // "?"')
-    echo "$TS | session_end | turns=$TURNS cost_usd=$COST | $DIR" >> "$LOG"
+    TURNS=$(jq_get '.num_turns')
+    COST=$(jq_get '.usage.total_cost_usd')
+    log_audit "$TS | session_end | turns=${TURNS:-?} cost_usd=${COST:-?} | $DIR"
     ;;
   PostToolUseFailure)
-    TOOL=$(echo "$INPUT" | jq -r '.tool_name // "unknown"')
-    ERR=$(echo "$INPUT"  | jq -r '.error // "unknown error"' | head -c 120)
-    echo "$TS | FAILED | $TOOL | $ERR | $DIR" >> "$LOG"
+    TOOL=$(sanitize "$(jq_get '.tool_name')")
+    ERR=$(sanitize "$(jq_get '.error')")
+    log_audit "$TS | FAILED | ${TOOL:-unknown} | ${ERR:-unknown error} | $DIR"
     ;;
   ConfigChange)
-    FILE=$(echo "$INPUT" | jq -r '.file_path // "unknown"')
-    echo "$TS | config_change | $FILE | $DIR" >> "$LOG"
+    FILE=$(sanitize "$(jq_get '.file_path')")
+    log_audit "$TS | config_change | ${FILE:-unknown} | $DIR"
     ;;
   *)
-    TOOL=$(echo "$INPUT" | jq -r '.tool_name // "unknown"')
-    FILE=$(echo "$INPUT" | jq -r '.tool_input.file_path // .tool_input.path // "unknown"')
-    echo "$TS | $TOOL | $FILE | $DIR" >> "$LOG"
+    TOOL=$(sanitize "$(jq_get '.tool_name')")
+    FILE=$(sanitize "$(jq_get '.tool_input.file_path')")
+    [[ -z "$FILE" ]] && FILE=$(sanitize "$(jq_get '.tool_input.path')")
+    log_audit "$TS | ${TOOL:-unknown} | ${FILE:-unknown} | $DIR"
     ;;
 esac

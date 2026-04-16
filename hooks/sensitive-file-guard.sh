@@ -3,7 +3,7 @@ export PATH="/opt/homebrew/bin:$PATH"
 # Blocks Read/Edit/Write tool calls targeting .env files and credentials.
 
 INPUT=$(cat)
-FILE=$(echo "$INPUT" | jq -r '.tool_input.file_path // .tool_input.path // ""')
+FILE=$(printf '%s\n' "$INPUT" | jq -r '.tool_input.file_path // .tool_input.path // ""')
 
 if [[ -z "$FILE" ]]; then
   echo '{"decision": "allow"}'; exit 0
@@ -23,7 +23,7 @@ BLOCKED=(
 )
 
 for P in "${BLOCKED[@]}"; do
-  if echo "$FILE" | grep -qE "$P"; then
+  if printf '%s\n' "$FILE" | grep -qE "$P"; then
     echo "{
       \"decision\": \"block\",
       \"reason\": \"Blocked: $FILE is a sensitive credentials file. Read env values from process.env in code — do not open the file directly.\"

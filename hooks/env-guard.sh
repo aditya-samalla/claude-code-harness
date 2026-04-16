@@ -4,7 +4,7 @@ export PATH="/opt/homebrew/bin:$PATH"
 # Returns a JSON decision — "block" halts the tool call, "allow" lets it proceed.
 
 INPUT=$(cat)
-CMD=$(echo "$INPUT" | jq -r '.tool_input.command // ""')
+CMD=$(printf '%s\n' "$INPUT" | jq -r '.tool_input.command // ""')
 
 BLOCKED=(
   'cat.*\.env'
@@ -16,7 +16,7 @@ BLOCKED=(
 )
 
 for P in "${BLOCKED[@]}"; do
-  if echo "$CMD" | grep -qiE "$P"; then
+  if printf '%s\n' "$CMD" | grep -qiE "$P"; then
     echo '{
       "decision": "block",
       "reason": "Blocked: command may expose sensitive env values. Reference variables by name in code only — do not print or transmit their values."

@@ -19,6 +19,11 @@ for f in "${HOOKS[@]}"; do
   echo "  ✓ hooks/$f"
 done
 
+# Statusline
+cp "$REPO/statusline.sh" ~/.claude/statusline.sh
+chmod +x ~/.claude/statusline.sh
+echo "  ✓ statusline.sh"
+
 # Global settings (backs up any existing file)
 if [[ -f ~/.claude/settings.json ]]; then
   cp ~/.claude/settings.json ~/.claude/settings.json.bak

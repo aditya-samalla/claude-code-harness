@@ -79,6 +79,18 @@ log_audit() {
   chmod 600 "$log" 2>/dev/null || true
 }
 
+# SHA-256 of a file's contents. Empty output if file is missing or unreadable.
+# Prefers shasum (macOS default), falls back to sha256sum (Linux default).
+sha256_file() {
+  local p="$1"
+  [[ -z "$p" || ! -f "$p" ]] && return 0
+  if command -v shasum &>/dev/null; then
+    shasum -a 256 "$p" 2>/dev/null | awk '{print $1}'
+  elif command -v sha256sum &>/dev/null; then
+    sha256sum "$p" 2>/dev/null | awk '{print $1}'
+  fi
+}
+
 # Resolve a path to its canonical form (symlinks, /private/var aliases).
 # Falls back gracefully when the path does not exist.
 canonical_path() {

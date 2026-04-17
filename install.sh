@@ -11,7 +11,7 @@ REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 echo "Installing Claude Code harness..."
 
 # ---- Directories ------------------------------------------------------
-mkdir -p ~/.claude/hooks ~/.claude/logs ~/.claude/transcripts
+mkdir -p ~/.claude/hooks ~/.claude/logs ~/.claude/transcripts ~/.claude/state/sessions
 echo "  ✓ directories"
 
 # ---- Hooks + lib ------------------------------------------------------
@@ -26,6 +26,7 @@ HOOKS=(
   audit.sh
   notify.sh
   session-start.sh
+  session-snapshot.sh
   pre-compact.sh
 )
 for f in "${HOOKS[@]}"; do

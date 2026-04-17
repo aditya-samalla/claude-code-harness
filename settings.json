@@ -148,7 +148,10 @@
     "Stop": [
       {
         "matcher": "",
-        "hooks": [{ "type": "command", "command": "~/.claude/hooks/audit.sh" }]
+        "hooks": [
+          { "type": "command", "command": "~/.claude/hooks/audit.sh" },
+          { "type": "command", "command": "~/.claude/hooks/session-snapshot.sh" }
+        ]
       }
     ]
   },

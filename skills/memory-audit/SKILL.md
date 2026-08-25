@@ -60,6 +60,15 @@ Each finding means exactly one thing — a queue with mixed meanings gets ignore
 - `SKIP` — malformed or unrecognised claim. The memory itself needs fixing.
 - `VERIFIED` — nothing to do.
 - `OVERSIZE` — the store's index is past a load limit; see step 6.
+- `SETTLED` — advisory, `--curate` only: a **project** memory whose every claim
+  is terminal and whose body asserts nothing in flight. Its work is finished, so
+  its index line can move to an archive section. This is a claim about the INDEX
+  LINE, never about the memory: the file, its links and its lessons all stay
+  exactly where they are, and moving the line back is a one-line edit. That
+  reversibility is why it can be suggested at all where the withdrawn retirement
+  heuristic could not — that one guessed from prose, this reads resolved
+  evidence. A `jira`-only memory is judged on its RECORDED status, since a shell
+  cannot reach Jira; the finding says so.
 - `CANDIDATE` — advisory, `--curate` only: two memories making the same claims.
 
 **2. Work out what the memory actually claims.**
@@ -164,7 +173,17 @@ index in append order drops its NEWEST entries. Measured on a real 218-memory
 store: 19 entries fell past the cut and five were `feedback_` memories — rules
 about how to work, which do nothing unless they are loaded. Ordering the index
 ACTIVE → `feedback` → `reference` → `project` costs nothing, changes no content,
-and makes whatever falls off the cheapest thing available.
+and makes whatever falls off the cheapest thing available:
+
+```bash
+bash ~/repos/claude-code-harness/bin/memory-index.sh --store <slug> --write
+```
+
+Run it whenever entries have been appended. The memory writer adds index lines
+at the end of the file regardless of type, so the ordering drifts on ordinary
+use — twice in one session a project entry landed in the middle of the reference
+section. The reorder is a pure permutation and aborts rather than write if the
+set of entry lines changed at all.
 
 Only then look at shedding entries. `--curate` reports pairs of memories making
 the same claims:
@@ -185,7 +204,15 @@ per step 5. Confirm with the user first, as with any deletion.
 Expect `--curate` to find nothing on a healthy store. Measured across 1,328
 distinct claims in one corpus, six appeared in more than one memory and five of
 those were a single pair. **Real memory corpora are not redundant, so compaction
-does not reclaim index lines** — retiring settled entries does.
+does not reclaim index lines.**
+
+Nor, usually, does retirement. On the same store, live ticket status for all 125
+keys the project memories cite showed only **3 of 56** provably settled: 21
+asserted open state and 32 cited a ticket that was unresolved or no longer
+existed. **A corpus of live work cannot be shrunk — it can only be ordered so
+that what truncation takes is the cheapest thing available.** Treat `SETTLED` as
+a slow drip that pays off as work finishes, not as a way out of an oversize
+index today.
 
 **Why there is no "retire this memory" suggestion.** It was built and removed.
 Staleness is not the test: an audit of a real 204-memory store found four

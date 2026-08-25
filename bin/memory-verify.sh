@@ -24,7 +24,7 @@
 #   --store SLUG  only this store (default: every store under ~/.claude/projects)
 #   --json        one JSON object per finding, for the skill to consume
 #   --all         also list VERIFIED memories (default: only what needs attention)
-#   --curate      also report index-overlap merge candidates (advisory; never deletes,
+#   --curate      also report merge candidates and settled entries (advisory; never deletes,
 #                 and deliberately proposes no retirements — see the note by CLOSED_RE)
 #
 # The index has TWO limits and the line one usually binds first: 200 lines and
@@ -37,6 +37,9 @@
 #   NEEDS_MCP  a well-formed claim only the skill can resolve (Jira is MCP-only)
 #   SKIP       malformed or unrecognised claim - the memory needs fixing
 #   OVERSIZE   the index is past a load limit and its tail is being dropped
+#   SETTLED    advisory, --curate only: a project memory whose work is finished,
+#              so its index line can be archived. Reversible, never a deletion —
+#              the file, its links and its lessons all stay exactly where they are.
 #   CANDIDATE  advisory, --curate only: two memories make the same claims
 #
 # Exit: 0 nothing needs attention · 1 at least one STALE · 2 only TRIAGE/SKIP
@@ -86,6 +89,7 @@ N_STALE=0
 N_TRIAGE=0
 N_SKIP=0
 N_NEEDS_MCP=0
+N_SETTLED=0
 N_VERIFIED=0
 N_OVERSIZE=0
 N_CANDIDATE=0
@@ -99,6 +103,7 @@ emit() {
     TRIAGE)   N_TRIAGE=$((N_TRIAGE+1)) ;;
     SKIP)     N_SKIP=$((N_SKIP+1)) ;;
     NEEDS_MCP) N_NEEDS_MCP=$((N_NEEDS_MCP+1)) ;;
+    SETTLED)  N_SETTLED=$((N_SETTLED+1)) ;;
     VERIFIED) N_VERIFIED=$((N_VERIFIED+1)); [ "$SHOW_ALL" -eq 1 ] || return 0 ;;
     OVERSIZE) N_OVERSIZE=$((N_OVERSIZE+1)) ;;
     CANDIDATE) N_CANDIDATE=$((N_CANDIDATE+1)) ;;
@@ -185,6 +190,7 @@ OPEN_RE='\b(pending|draft pr|awaiting|not yet (merged|deployed|landed|shipped)|b
 # append-don't-revise contradiction: an update was added, the stale sentence
 # stayed. Boundaried for the same reason, and because "unresolved" contains
 # "resolved" — matching it would invert the signal entirely.
+TERMINAL_RE='^(Done|Closed|Resolved|Won.t Do|Mitigated|IR Published)$'
 CLOSED_RE='\b(merged|shipped|deployed|landed|resolved|verified in prod)\b'
 
 # There is deliberately NO "retire this memory" heuristic here, and the reason
@@ -312,6 +318,7 @@ scan_curation() {
 
 scan_store() {
   local dir="$1" slug="$2" f base claims line kind ref expected result actual age ids id_count note
+  local settled recorded_only mtype
 
   for f in "$dir"/*.md; do
     [ -f "$f" ] || continue
@@ -320,6 +327,8 @@ scan_store() {
 
     claims=$(verify_lines "$f")
     if [ -n "$claims" ]; then
+      # Track whether every claim in this memory has reached a terminal state.
+      settled=1; recorded_only=0
       # Here-string, not a pipe: a piped `while` runs in a subshell and the
       # N_* counters incremented inside it would be discarded on exit.
       while IFS= read -r line; do
@@ -329,6 +338,7 @@ scan_store() {
         expected=$(printf '%s' "$line" | awk '{print $3}')
         if [ -z "$ref" ] || [ -z "$expected" ]; then
           emit SKIP "$slug" "$base" "malformed verify claim: $line"
+          settled=0
           continue
         fi
         case "$kind" in
@@ -336,21 +346,51 @@ scan_store() {
             result=$(resolve_gh "$ref" "$expected")
             actual=$(printf '%s' "$result" | awk '{print $2}')
             case "$result" in
-              ok*)       emit VERIFIED "$slug" "$base" "$ref is $actual, as recorded" ;;
-              mismatch*) emit STALE "$slug" "$base" "$ref expected=$expected actual=$actual" ;;
-              *)         emit SKIP  "$slug" "$base" "$ref $(printf '%s' "$result" | cut -d' ' -f2-)" ;;
+              ok*)       emit VERIFIED "$slug" "$base" "$ref is $actual, as recorded"
+                         printf '%s' "$actual" | grep -qiE '^(merged|closed)$' || settled=0 ;;
+              mismatch*) emit STALE "$slug" "$base" "$ref expected=$expected actual=$actual"
+                         settled=0 ;;
+              *)         emit SKIP  "$slug" "$base" "$ref $(printf '%s' "$result" | cut -d' ' -f2-)"
+                         settled=0 ;;
             esac
             ;;
           jira)
             # Jira lives behind MCP, which a shell script cannot reach. The
             # skill resolves these; flagging rather than silently passing.
             emit NEEDS_MCP "$slug" "$base" "$ref is resolvable only through the Jira MCP, so the /memory-audit skill has to run it"
+            # The shell cannot confirm this, so the recorded status is the only
+            # evidence there is. Good enough to SUGGEST retirement, which is
+            # reversible - and if it ever diverges, the skill's next run says
+            # STALE. Never good enough to act on unattended.
+            printf '%s' "$expected" | grep -qiE "$TERMINAL_RE" || settled=0
+            recorded_only=1
             ;;
           *)
             emit SKIP "$slug" "$base" "unknown verify kind '$kind'"
+            settled=0
             ;;
         esac
       done <<< "$claims"
+
+      # Every claim terminal, no in-flight language, and lifecycle-bound: this
+      # memory's WORK is finished. That is a claim about the index line, not
+      # about the memory - the lesson usually outlives the ticket, so the file
+      # and its links stay exactly where they are and only the entry moves to a
+      # section that is not loaded. Reversible in one line, which is why it may
+      # be suggested at all where the withdrawn retirement heuristic could not:
+      # that one guessed from prose, this one reads resolved evidence.
+      mtype=$(sed -n 's/^  type: *\([a-z]*\) *$/\1/p' "$f" | head -1)
+      # Behind --curate, with the other index-size advice: a healthy store
+      # should stay quiet on a default run, and a settled memory is not a
+      # defect. It is only interesting when the index is being trimmed.
+      if [ "$CURATE" -eq 1 ] && [ "$settled" -eq 1 ] && [ "$mtype" = "project" ] \
+         && ! grep -qiE "$OPEN_RE" "$f" 2>/dev/null; then
+        if [ "$recorded_only" -eq 1 ]; then
+          emit SETTLED "$slug" "$base" "every claim is terminal per the RECORDED evidence and nothing is in flight — the index line can move to the archive section"
+        else
+          emit SETTLED "$slug" "$base" "every claim verified terminal and nothing is in flight — the index line can move to the archive section"
+        fi
+      fi
       continue
     fi
 
@@ -415,7 +455,7 @@ fi
 
 if [ "$AS_JSON" -eq 0 ]; then
   echo ""
-  echo "--- Results: $N_STALE stale, $N_TRIAGE triage, $N_NEEDS_MCP need-mcp, $N_SKIP skipped, $N_VERIFIED verified, $N_OVERSIZE oversize, $N_CANDIDATE candidates"
+  echo "--- Results: $N_STALE stale, $N_TRIAGE triage, $N_NEEDS_MCP need-mcp, $N_SKIP skipped, $N_VERIFIED verified, $N_OVERSIZE oversize, $N_SETTLED settled, $N_CANDIDATE candidates"
   [ "$N_TRIAGE" -gt 0 ] && echo "Run /memory-audit to resolve the TRIAGE entries and give them verify: blocks."
   if [ "$N_OVERSIZE" -gt 0 ] && [ "$CURATE" -eq 0 ]; then
     echo "The index is over its load limit, so its tail is dropped at session start."

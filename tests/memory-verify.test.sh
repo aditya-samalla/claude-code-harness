@@ -404,6 +404,63 @@ check_absent "labels are excluded by the length floor" "CANDIDATE" "$OUT"
 
 echo ""
 
+echo "=== SETTLED: a project memory whose work is finished, advisory only ==="
+# The sound form of the withdrawn retirement heuristic. That one guessed
+# settledness from prose and flagged two durable facts. This one reads resolved
+# evidence, only ever moves an INDEX LINE, and never touches the file.
+rm -f "$STORE"/*.md
+mem done_work.md 40 "verify:" "  - gh acme/api#4821 merged" "" "The idle-timeout fix landed."
+OUT=$(run --curate)
+check_contains "flagged under --curate"  "SETTLED"                       "$OUT"
+check_contains "names the memory"        "done_work.md"                  "$OUT"
+check_contains "says it is verified"     "every claim verified terminal" "$OUT"
+check_absent   "silent on a default run" "SETTLED" "$(run)"
+check_eq       "does not change the exit code" "0" "$(run_rc --curate)"
+
+echo ""
+echo "=== anything still open disqualifies ==="
+rm -f "$STORE"/*.md
+mem half.md 40 "verify:" "  - gh acme/api#4821 merged" "  - gh acme/web#900 open" "" "One half landed."
+check_absent "one open claim is enough" "SETTLED" "$(run --curate)"
+
+rm -f "$STORE"/*.md
+mem talky.md 40 "verify:" "  - gh acme/api#4821 merged" "" "Landed, but the rollout is blocked on review."
+check_absent "in-flight language in the body disqualifies" "SETTLED" "$(run --curate)"
+
+echo ""
+echo "=== only project memories settle; a durable fact has no lifecycle ==="
+rm -f "$STORE"/*.md
+mem lesson.md 40 "verify:" "  - gh acme/api#4821 merged" "" "The lesson outlives the ticket."
+sed -i.bak 's/^  type: project/  type: reference/' "$STORE/lesson.md" && rm -f "$STORE/lesson.md.bak"
+check_absent "a reference memory never settles" "SETTLED" "$(run --curate)"
+
+echo ""
+echo "=== a jira-only memory settles on RECORDED evidence, and says so ==="
+# The shell cannot reach Jira, so the block is the only evidence there is. Good
+# enough to suggest a reversible index move; the skill's next run says STALE if
+# it ever diverges.
+rm -f "$STORE"/*.md
+mem tracked.md 40 "verify:" "  - jira PROJ-1 Done" "" "Shipped."
+OUT=$(run --curate)
+check_contains "flagged"                 "SETTLED"                   "$OUT"
+check_contains "labelled as recorded"    "per the RECORDED evidence" "$OUT"
+check_absent   "not claimed as verified" "every claim verified"      "$OUT"
+
+rm -f "$STORE"/*.md
+mem ongoing.md 40 "verify:" "  - jira PROJ-1 In Progress" "" "Underway."
+check_absent "a non-terminal jira status disqualifies" "SETTLED" "$(run --curate)"
+
+echo ""
+echo "=== SETTLED never edits or deletes anything ==="
+rm -f "$STORE"/*.md
+mem done_work.md 40 "verify:" "  - gh acme/api#4821 merged" "" "Landed."
+SUM_BEFORE=$(cat "$STORE"/*.md | shasum | awk '{print $1}')
+run --curate >/dev/null 2>&1
+check_eq "file untouched" "$SUM_BEFORE" "$(cat "$STORE"/*.md | shasum | awk '{print $1}')"
+check_eq "and still present" "1" "$(ls "$STORE"/*.md | wc -l | tr -d ' ')"
+
+echo ""
+
 echo "=== Candidates are advisory: only with --curate, and never a deletion ==="
 OUT=$(run)
 check_absent "no CANDIDATE without the flag" "CANDIDATE" "$OUT"

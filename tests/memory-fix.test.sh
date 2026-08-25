@@ -1,0 +1,215 @@
+#!/usr/bin/env bash
+# Tests for memory-fix.sh — builds a synthetic memory store in a temp dir, so the
+# suite is hermetic: no real memory is read or written.
+#
+# The invariant under test throughout is that this tool only makes changes with a
+# single provably-correct answer. Half of these cases assert that it does NOT act.
+set -u
+SCRIPT="bin/memory-fix.sh"
+PASS=0; FAIL=0
+
+TMP=$(mktemp -d)
+trap 'rm -rf "$TMP"' EXIT
+
+export CLAUDE_MEMORY_PROJECTS_DIR="$TMP/projects"
+STORE="$CLAUDE_MEMORY_PROJECTS_DIR/teststore/memory"
+mkdir -p "$STORE"
+
+pass() { echo "  OK: $1"; PASS=$((PASS+1)); }
+fail() { echo "  FAIL: $1  $2"; FAIL=$((FAIL+1)); }
+check_contains() { case "$3" in *"$2"*) pass "$1" ;; *) fail "$1" "expected: $2" ;; esac; }
+check_absent()   { case "$3" in *"$2"*) fail "$1" "unexpected: $2" ;; *) pass "$1" ;; esac; }
+check_eq()       { if [ "$3" = "$2" ]; then pass "$1"; else fail "$1" "expect=$2 got=$3"; fi; }
+check_file()     { if [ -f "$2" ]; then pass "$1"; else fail "$1" "missing file: $2"; fi; }
+
+run()    { bash "$SCRIPT" --store teststore "$@" 2>&1; }
+run_rc() { bash "$SCRIPT" --store teststore "$@" >/dev/null 2>&1; echo $?; }
+
+# A memory with an explicit `name:` so tests can make it disagree with the file.
+mem() {  # mem <filename> <name-value> <body...>
+  local file="$1" nm="$2"; shift 2
+  { echo "---"; echo "name: $nm"; echo "description: fixture"
+    echo "metadata:"; echo "  type: reference"; echo "  modified: 2020-01-01"
+    echo "---"; printf '%s\n' "$@"; } > "$STORE/$file"
+}
+# A memory with no `modified:` stamp at all.
+mem_nostamp() {  # mem_nostamp <filename> <body...>
+  local file="$1"; shift
+  { echo "---"; echo "name: ${file%.md}"; echo "description: fixture"
+    echo "metadata:"; echo "  type: reference"; echo "---"; printf '%s\n' "$@"; } > "$STORE/$file"
+}
+reset_store() { rm -rf "$STORE" && mkdir -p "$STORE"; }
+git_store() {
+  git -C "$STORE" init -q
+  ( cd "$STORE" && git add -- *.md )
+  git -C "$STORE" -c user.name=t -c user.email=t@t commit -q -m base
+}
+
+# ---------------------------------------------------------------------------
+echo "=== A clean store is silent and exits 0 ==="
+reset_store
+mem a.md a "body with a good [[b]] link"
+mem b.md b "body"
+OUT=$(run); check_contains "reports clean" "clean: nothing to fix" "$OUT"
+check_eq "exits 0" "0" "$(run_rc)"
+
+# ---------------------------------------------------------------------------
+echo ""
+echo "=== name: is rewritten to the filename stem, and the file is NOT renamed ==="
+reset_store
+mem alpha_beta.md "alpha-beta" "body"
+OUT=$(run)
+check_contains "reports the mismatch"    "name:=stem 1"      "$OUT"
+check_contains "names the wanted value"  "alpha_beta"        "$OUT"
+check_eq       "dry run changes nothing" "alpha-beta" \
+               "$(sed -n 's/^name: //p' "$STORE/alpha_beta.md")"
+git_store; run --apply >/dev/null
+check_eq   "frontmatter rewritten" "alpha_beta" "$(sed -n 's/^name: //p' "$STORE/alpha_beta.md")"
+check_file "file kept its name"    "$STORE/alpha_beta.md"
+check_eq   "second run is a no-op" "0" "$(run_rc --apply --force)"
+
+echo ""
+echo "=== a name: inside a fenced example in the body is left alone ==="
+reset_store
+mem gamma.md "gamma-x" 'Example frontmatter:' '```' 'name: not-a-real-memory' '```'
+git_store; run --apply >/dev/null
+check_eq "frontmatter fixed"     "gamma"              "$(sed -n '2s/^name: //p' "$STORE/gamma.md")"
+check_contains "body untouched"  "name: not-a-real-memory" "$(cat "$STORE/gamma.md")"
+
+# ---------------------------------------------------------------------------
+echo ""
+echo "=== wiki-links: repaired only when exactly one file can be meant ==="
+reset_store
+mem one_two_three.md one_two_three "target"
+mem src.md src "see [[one-two-three]] and [[one_two_three.md]]"
+OUT=$(run)
+check_contains "both variants counted" "links repaired 2" "$OUT"
+git_store; run --apply >/dev/null
+check_contains "hyphen form repaired"    "[[one_two_three]]"    "$(cat "$STORE/src.md")"
+check_absent   "no hyphen form remains"  "[[one-two-three]]"    "$(cat "$STORE/src.md")"
+check_absent   "no .md suffix remains"   "[[one_two_three.md]]" "$(cat "$STORE/src.md")"
+
+echo ""
+echo "=== a POSIX character class is not a wiki-link ==="
+reset_store
+mem re.md re 'match with sed "s/^[[:space:]]*x//" and [[:alpha:]] too'
+OUT=$(run)
+check_absent "not reported as a link"  ":space:"                 "$OUT"
+check_contains "store still clean"     "clean: nothing to fix"   "$OUT"
+
+echo ""
+echo "=== a link to a memory that does not exist is a forward ref, not a defect ==="
+reset_store
+mem solo.md solo "worth writing later: [[project_not_yet_written]]"
+OUT=$(run)
+check_contains "reported as forward ref"  "forward ref"              "$OUT"
+check_contains "named"                    "project_not_yet_written"  "$OUT"
+check_absent   "never called ambiguous"   "AMBIGUOUS"                "$OUT"
+git_store; run --apply --force >/dev/null
+check_contains "left exactly as written"  "[[project_not_yet_written]]" "$(cat "$STORE/solo.md")"
+
+echo ""
+echo "=== a link with two possible targets is reported, never guessed ==="
+reset_store
+mem a_b_c.md a_b_c "one"
+mem a-b_c.md a-b_c "two"
+mem ref.md  ref   "ambiguous [[a-b-c]]"
+OUT=$(run)
+check_contains "flagged ambiguous"  "AMBIGUOUS link"  "$OUT"
+check_contains "candidate count"    "(2 candidates)"  "$OUT"
+git_store; run --apply --force >/dev/null
+check_contains "left unchanged"     "[[a-b-c]]"       "$(cat "$STORE/ref.md")"
+
+# ---------------------------------------------------------------------------
+echo ""
+echo "=== modified: is backfilled from mtime, never from today ==="
+reset_store
+mem_nostamp old.md "body"
+touch -t 202301150000 "$STORE/old.md"
+OUT=$(run)
+check_contains "counted" "modified backfilled 1" "$OUT"
+git_store
+touch -t 202301150000 "$STORE/old.md"     # git checkout/add can restat
+run --apply >/dev/null
+check_eq "stamped with the file's own mtime" "2023-01-15" \
+         "$(sed -n 's/^  modified: //p' "$STORE/old.md")"
+check_contains "provenance recorded" "modified_source: mtime" "$(cat "$STORE/old.md")"
+check_absent   "not stamped today"   "$(date +%Y-%m-%d)"      "$(sed -n 's/^  modified: //p' "$STORE/old.md")"
+check_eq "second run is a no-op" "0" "$(run_rc --apply --force)"
+
+echo ""
+echo "=== a memory whose mtime is today gets NO stamp, rather than a fabricated one ==="
+reset_store
+mem_nostamp fresh.md "body"          # created just now, so mtime is today
+OUT=$(run)
+check_contains "reported as undatable" "no usable date"          "$OUT"
+check_absent   "not counted as a fix"  "modified backfilled 1"   "$OUT"
+git_store; run --apply --force >/dev/null
+check_absent "left unstamped rather than stamped today" "modified:" "$(cat "$STORE/fresh.md")"
+
+echo ""
+echo "=== normalising a name does not advance that memory's modified stamp ==="
+reset_store
+mem_nostamp drift.md "body"
+# Rewrite the name so pass 1 must edit the file, and backdate it.
+sed -i.bak 's/^name: drift/name: drift-x/' "$STORE/drift.md" && rm -f "$STORE/drift.md.bak"
+touch -t 202301150000 "$STORE/drift.md"
+git_store
+touch -t 202301150000 "$STORE/drift.md"
+run --apply >/dev/null
+check_eq "name fixed"                    "drift"      "$(sed -n 's/^name: //p' "$STORE/drift.md")"
+check_eq "stamp is the ORIGINAL mtime"   "2023-01-15" "$(sed -n 's/^  modified: //p' "$STORE/drift.md")"
+
+# ---------------------------------------------------------------------------
+echo ""
+echo "=== malformed frontmatter is its own finding, not lumped in with links ==="
+reset_store
+printf -- '---\nname: noblock\ndescription: d\n---\nbody\n' > "$STORE/noblock.md"
+printf -- '---\ndescription: d\nmetadata:\n  type: reference\n---\nbody\n' > "$STORE/noname.md"
+OUT=$(run)
+check_contains "missing metadata block reported" "no metadata: block" "$OUT"
+check_contains "missing name reported"           "no name: in frontmatter" "$OUT"
+check_contains "counted as malformed"            "2 memories have malformed frontmatter" "$OUT"
+check_absent   "not counted as ambiguous links"  "ambiguous 2" "$OUT"
+
+echo ""
+echo "=== a missing metadata block is still reported when the mtime guard fires ==="
+# Both conditions hold at once here: no metadata block AND an mtime of today.
+# Checking the mtime first would swallow the malformed finding entirely.
+check_contains "not masked by the today-mtime guard" "no metadata: block" "$(run)"
+
+# ---------------------------------------------------------------------------
+echo ""
+echo "=== --apply refuses where there would be no undo ==="
+reset_store
+mem nogit.md "nogit-x" "body"
+OUT=$(run --apply)
+check_contains "refuses without git"     "not a git repo"  "$OUT"
+check_eq       "exits 3"                 "3"               "$(run_rc --apply)"
+check_eq       "and changed nothing"     "nogit-x"         "$(sed -n 's/^name: //p' "$STORE/nogit.md")"
+
+echo ""
+echo "=== --apply refuses on a dirty store, so the fix lands as its own commit ==="
+reset_store
+mem dirty.md "dirty-x" "body"
+git_store
+echo "uncommitted edit" >> "$STORE/dirty.md"
+OUT=$(run --apply)
+check_contains "refuses when dirty" "uncommitted changes" "$OUT"
+check_eq       "exits 3"            "3"                   "$(run_rc --apply)"
+check_contains "--force overrides"  "applied"             "$(run --apply --force)"
+
+# ---------------------------------------------------------------------------
+echo ""
+echo "=== a dry run never writes ==="
+reset_store
+mem d1.md "d1-x" "link [[d2-x]]"
+mem_nostamp d2.md "body"
+BEFORE=$(cat "$STORE"/*.md | shasum | awk '{print $1}')
+run >/dev/null 2>&1
+AFTER=$(cat "$STORE"/*.md | shasum | awk '{print $1}')
+check_eq "store byte-identical after a dry run" "$BEFORE" "$AFTER"
+
+echo ""
+echo "passed $PASS, failed $FAIL"
+[ "$FAIL" -eq 0 ]

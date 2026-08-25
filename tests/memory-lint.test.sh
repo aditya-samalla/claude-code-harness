@@ -139,6 +139,62 @@ echo "- [T](budget.md) — $DASHES" > "$STORE/MEMORY.md"
 check_absent "not flagged on byte count" "is clipped around" "$(lint "$STORE/budget.md")"
 
 echo ""
+echo "=== an index hook carrying changing state is the drift nothing else catches ==="
+# The file and its hook never contradict each other from inside the store; the
+# contradiction lives on GitHub. So this can only be caught at write time.
+: > "$STORE/MEMORY.md"
+write_mem drifty "a state-free description" "body"
+echo "- [T](drifty.md) — 3 PRs open (#1 #2 #3)" > "$STORE/MEMORY.md"
+check_contains "flagged" "index line asserts changing state" "$(lint "$STORE/drifty.md")"
+
+echo "- [T](drifty.md) — why the cypher tail dominates the suite" > "$STORE/MEMORY.md"
+check_absent "a retrieval cue is not flagged" "index line asserts changing state" "$(lint "$STORE/drifty.md")"
+
+echo ""
+echo "=== an entry filed under the wrong type marker defeats the ordering ==="
+mk_index() {  # mk_index <marker-section-for-the-entry> <entry-file>
+  { echo "<!-- ACTIVE WORK — kept at top so index truncation cannot drop it -->"
+    echo "- [A](other.md) — hook"
+    echo ""
+    echo "<!-- FEEDBACK — how to work; these only function when loaded, so never in the tail -->"
+    [ "$1" = FEEDBACK ] && echo "- [T]($2) — hook"
+    echo ""
+    echo "<!-- REFERENCE — durable facts; the index line is how the model learns they exist -->"
+    [ "$1" = REFERENCE ] && echo "- [T]($2) — hook"
+    echo ""
+    echo "<!-- PROJECT — lifecycle-bound, newest first; the oldest tail is archive-eligible -->"
+    [ "$1" = PROJECT ] && echo "- [T]($2) — hook"
+    [ "$1" = ACTIVE ] && sed -i.bak "2a\\
+- [T]($2) — hook" "$STORE/MEMORY.md" 2>/dev/null
+  } > "$STORE/MEMORY.md"
+}
+: > "$STORE/MEMORY.md"
+write_mem refmem "a description" "body"          # type: reference
+
+mk_index PROJECT refmem.md
+OUT=$(lint "$STORE/refmem.md")
+check_contains "wrong section flagged"   "sits in the PROJECT section" "$OUT"
+check_contains "names the actual type"   "type: reference"             "$OUT"
+check_contains "says how to fix it"      "memory-index.sh"             "$OUT"
+
+mk_index REFERENCE refmem.md
+check_absent "right section is silent" "sits in the" "$(lint "$STORE/refmem.md")"
+
+mk_index FEEDBACK refmem.md
+check_contains "feedback section flagged too" "sits in the FEEDBACK section" "$(lint "$STORE/refmem.md")"
+
+echo ""
+echo "=== the hand-curated ACTIVE block accepts any type ==="
+{ echo "<!-- ACTIVE WORK — kept at top so index truncation cannot drop it -->"
+  echo "- [T](refmem.md) — hook"; } > "$STORE/MEMORY.md"
+check_absent "no placement complaint in ACTIVE" "sits in the" "$(lint "$STORE/refmem.md")"
+
+echo ""
+echo "=== an index with no section markers yet is not nagged about placement ==="
+echo "- [T](refmem.md) — hook" > "$STORE/MEMORY.md"
+check_absent "silent on an unsorted index" "sits in the" "$(lint "$STORE/refmem.md")"
+
+echo ""
 echo "=== the hook never edits and never blocks a write ==="
 : > "$STORE/MEMORY.md"
 write_mem untouched "a description" "The PR is not yet merged."

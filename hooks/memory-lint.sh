@@ -120,6 +120,33 @@ if [ -f "$DIR/MEMORY.md" ]; then
     ILEN=${#IDX}
     [ "$ILEN" -gt "$INDEX_LINE_MAX" ] \
       && add "its index line is $ILEN chars and is clipped around $INDEX_LINE_MAX, so the hook is cut mid-clause. Shorten the hook (or the title), do not let it truncate."
+
+    # An index hook carrying changing state is the drift no checker can catch.
+    # The file and the hook never contradict each other from inside the store —
+    # the contradiction lives on GitHub. A live index had a hook reading
+    # "3 PRs open (#1938 #1608 #29)" pointing at a memory whose own body already
+    # said all three had merged, and it sat in the most-read block of the file.
+    if printf '%s' "$IDX" | grep -qiE '\b(still open|now open|pending|awaiting|in progress|not yet (merged|landed|deployed)|[0-9]+ prs? open|unreviewed|blocked on)\b'; then
+      add "its index line asserts changing state. The hook is the one thing loaded into every session and nothing inside the store can ever contradict it — say what the memory is ABOUT and leave the state in the body."
+    fi
+
+    # Placement. The index is ordered by type so that truncation drops the
+    # cheapest lines; an entry filed under the wrong marker defeats that
+    # silently. The live memory writer appends to the end of the file
+    # regardless of type, so this fires exactly when it should.
+    SECTION=$(awk -v want="$IDX" '
+      /^<!--/ { m = $0 }
+      $0 == want { print m; exit }
+    ' "$DIR/MEMORY.md")
+    case "$SECTION" in
+      *"ACTIVE WORK"*|"") ;;                       # hand-curated, or unsorted index
+      *FEEDBACK*)  [ "$TYPE" = "feedback" ] || [ "$TYPE" = "user" ] \
+                     || add "its index line sits in the FEEDBACK section but the memory is \`type: $TYPE\`. Run: bash bin/memory-index.sh --store <slug> --write" ;;
+      *REFERENCE*) [ "$TYPE" = "reference" ] \
+                     || add "its index line sits in the REFERENCE section but the memory is \`type: $TYPE\`. Run: bash bin/memory-index.sh --store <slug> --write" ;;
+      *PROJECT*)   [ "$TYPE" = "project" ] \
+                     || add "its index line sits in the PROJECT section but the memory is \`type: $TYPE\`. Run: bash bin/memory-index.sh --store <slug> --write" ;;
+    esac
   fi
 fi
 

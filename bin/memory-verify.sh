@@ -24,7 +24,8 @@
 #   --store SLUG  only this store (default: every store under ~/.claude/projects)
 #   --json        one JSON object per finding, for the skill to consume
 #   --all         also list VERIFIED memories (default: only what needs attention)
-#   --curate      also propose retirement + merge candidates (advisory, never deletes)
+#   --curate      also report index-overlap merge candidates (advisory; never deletes,
+#                 and deliberately proposes no retirements — see the note by CLOSED_RE)
 #
 # The index has TWO limits and the line one usually binds first: 200 lines and
 # ~25,000 characters. One line per memory means a store with more than ~200
@@ -379,7 +380,7 @@ if [ "$AS_JSON" -eq 0 ]; then
   echo "--- Results: $N_STALE stale, $N_TRIAGE triage, $N_SKIP skipped, $N_VERIFIED verified, $N_OVERSIZE oversize, $N_CANDIDATE candidates"
   [ "$N_TRIAGE" -gt 0 ] && echo "Run /memory-audit to resolve the TRIAGE entries and give them verify: blocks."
   if [ "$N_OVERSIZE" -gt 0 ] && [ "$CURATE" -eq 0 ]; then
-    echo "The index is over its load limit. Re-run with --curate for retirement and merge candidates."
+    echo "The index is over its load limit. Re-run with --curate to see which memories cover the same ticket."
   fi
 fi
 

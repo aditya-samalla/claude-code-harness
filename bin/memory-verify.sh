@@ -31,6 +31,14 @@
 # ~25,000 characters. One line per memory means a store with more than ~200
 # memories cannot comply by shortening hooks — only by consolidating them.
 #
+# Findings are a queue, so each one means exactly one thing:
+#   STALE      a verify claim resolved against reality and disagrees
+#   TRIAGE     asserts open state with no way to check it - needs a verify block
+#   NEEDS_MCP  a well-formed claim only the skill can resolve (Jira is MCP-only)
+#   SKIP       malformed or unrecognised claim - the memory needs fixing
+#   OVERSIZE   the index is past a load limit and its tail is being dropped
+#   CANDIDATE  advisory, --curate only: two memories make the same claims
+#
 # Exit: 0 nothing needs attention · 1 at least one STALE · 2 only TRIAGE/SKIP
 #       3 could not run
 #
@@ -77,6 +85,7 @@ fi
 N_STALE=0
 N_TRIAGE=0
 N_SKIP=0
+N_NEEDS_MCP=0
 N_VERIFIED=0
 N_OVERSIZE=0
 N_CANDIDATE=0
@@ -89,6 +98,7 @@ emit() {
     STALE)    N_STALE=$((N_STALE+1)) ;;
     TRIAGE)   N_TRIAGE=$((N_TRIAGE+1)) ;;
     SKIP)     N_SKIP=$((N_SKIP+1)) ;;
+    NEEDS_MCP) N_NEEDS_MCP=$((N_NEEDS_MCP+1)) ;;
     VERIFIED) N_VERIFIED=$((N_VERIFIED+1)); [ "$SHOW_ALL" -eq 1 ] || return 0 ;;
     OVERSIZE) N_OVERSIZE=$((N_OVERSIZE+1)) ;;
     CANDIDATE) N_CANDIDATE=$((N_CANDIDATE+1)) ;;
@@ -240,42 +250,64 @@ scan_index_size() {
   fi
   [ -n "$over" ] || return 0
   emit OVERSIZE "$slug" "MEMORY.md" \
-    "index over the load limit ($over; $entries entries) — the tail is dropped at session start. One line per memory, so shortening hooks cannot fix the LINE limit; consolidate with --curate."
+    "index over the load limit ($over; $entries entries) — the tail is dropped at session start. One line per memory, so shortening hooks cannot fix the LINE limit; order by type so the tail is cheap, then retire settled entries."
 }
 
 # Advisory overlap pass. Answers one question a size problem actually turns
-# on: are two memories about the same ticket, and could they be one file?
+# on: do two memories make the same claims, and could they be one file?
+#
+# This was originally keyed on ticket number and that was wrong. Measured on a
+# real 218-memory store, ticket-key grouping produced four candidate groups; the
+# one genuine pair shared four verbatim claims and the other three shared ZERO.
+# A ticket cited by two memories usually means one records the fix and the other
+# records a lesson learned alongside it — different content, correctly separate
+# files. Grouping on shared claims instead separates them exactly.
+#
 # Reports only — see the note above on why retirement is not automated.
+CURATE_MIN_OVERLAP="${MEMORY_CURATE_MIN_OVERLAP:-2}"
+
 scan_curation() {
-  local dir="$1" slug="$2" f base keys k
-  local tmp="${TMPDIR:-/tmp}/mv-keys.$$"
+  local dir="$1" slug="$2" f base
+  local tmp="${TMPDIR:-/tmp}/mv-claims.$$"
   : > "$tmp"
 
+  # A memory's claims are its bolded runs. Short bolds are labels ("**Note**")
+  # and match everywhere, so they are excluded by the length floor.
   for f in "$dir"/*.md; do
     [ -f "$f" ] || continue
     base=$(basename "$f")
     [ "$base" = "MEMORY.md" ] && continue
-
-    # Keys from the name/description only. A ticket cited in the body is a
-    # reference; one named in the description is what the memory is ABOUT.
-    keys=$(sed -n '1,12p' "$f" | grep -E '^(name|description):' \
-             | grep -oE '[A-Z]{2,10}-[0-9]{2,6}' | sort -u)
-    for k in $keys; do
-      printf '%s\t%s\n' "$k" "$base" >> "$tmp"
-    done
+    [ "$base" = "ARCHIVE.md" ] && continue
+    grep -o '\*\*[^*]\{25,160\}\*\*' "$f" 2>/dev/null \
+      | sed 's/\*\*//g' | tr 'A-Z' 'a-z' | tr -s ' \t' ' ' \
+      | sed 's/^ //; s/ $//' | sort -u \
+      | while IFS= read -r c; do printf '%s\t%s\n' "$c" "$base"; done >> "$tmp"
   done
+  [ -s "$tmp" ] || { rm -f "$tmp"; return 0; }
 
-  # Group by ticket key. Written to a file and read back by redirect, not by
-  # pipe: a piped `while` runs in a subshell and emit's counters would vanish.
-  sort -u "$tmp" | awk -F'\t' '
-    { seen[$1] = seen[$1] " " $2; n[$1]++ }
-    END { for (key in n) if (n[key] > 1) printf "%s\t%d\t%s\n", key, n[key], seen[key] }
-  ' | sort > "$tmp.g"
-  while IFS="$(printf '\t')" read -r k cnt files; do
-    [ -z "$k" ] && continue
-    emit CANDIDATE "$slug" "$k" "merge? $cnt memories are about this ticket:$files"
-  done < "$tmp.g"
-  rm -f "$tmp" "$tmp.g"
+  # Every unordered file pair per shared claim, counted, then thresholded.
+  # Written to a file and read back by redirect, not by pipe: a piped `while`
+  # runs in a subshell and emit's counters would vanish.
+  sort "$tmp" | awk -F'\t' '
+    { c[$1] = c[$1] " " $2 }
+    END {
+      for (k in c) {
+        n = split(c[k], a, " ")
+        for (i = 1; i <= n; i++) for (j = i + 1; j <= n; j++) {
+          if (a[i] == "" || a[j] == "" || a[i] == a[j]) continue
+          if (a[i] < a[j]) print a[i] "\t" a[j]; else print a[j] "\t" a[i]
+        }
+      }
+    }
+  ' | sort | uniq -c | sort -rn > "$tmp.p"
+
+  while read -r cnt pair; do
+    [ -z "$cnt" ] && continue
+    [ "$cnt" -lt "$CURATE_MIN_OVERLAP" ] && continue
+    emit CANDIDATE "$slug" "$(printf '%s' "$pair" | tr '\t' ' ')" \
+      "merge? these two share $cnt verbatim claims"
+  done < "$tmp.p"
+  rm -f "$tmp" "$tmp.p"
 }
 
 scan_store() {
@@ -312,7 +344,7 @@ scan_store() {
           jira)
             # Jira lives behind MCP, which a shell script cannot reach. The
             # skill resolves these; flagging rather than silently passing.
-            emit SKIP "$slug" "$base" "$ref needs the /memory-audit skill (Jira is MCP-only)"
+            emit NEEDS_MCP "$slug" "$base" "$ref is resolvable only through the Jira MCP, so the /memory-audit skill has to run it"
             ;;
           *)
             emit SKIP "$slug" "$base" "unknown verify kind '$kind'"
@@ -322,11 +354,17 @@ scan_store() {
       continue
     fi
 
-    # No verify block. Worth triaging only if it asserts in-flight state and
-    # has had time to go stale.
+    # No verify block. Worth triaging if it asserts in-flight state.
+    #
+    # Deliberately NOT age-gated. Rot rate is a property of the claim, not of
+    # the file: a durable fact is worth re-checking on a cadence, but a claim
+    # about something still open with no way to check it mechanically is a
+    # write-time defect the moment it is written. The evidence is a memory in
+    # this corpus that asserted three PRs were open when all three had merged
+    # the same day - a 14-day gate would have hidden it for two weeks, and it
+    # sat in the most-read block of the index the whole time.
     if grep -qiE "$OPEN_RE" "$f" 2>/dev/null; then
       age=$(age_days "$f")
-      [ "$age" -lt "$TRIAGE_MIN_AGE_DAYS" ] && continue
       # Advisory context for the skill, which reads the file itself anyway — so
       # bias to high signal over completeness. Standards tokens (SHA-256,
       # ISO-8601) match the Jira-key shape but are never tickets, and a file
@@ -377,13 +415,15 @@ fi
 
 if [ "$AS_JSON" -eq 0 ]; then
   echo ""
-  echo "--- Results: $N_STALE stale, $N_TRIAGE triage, $N_SKIP skipped, $N_VERIFIED verified, $N_OVERSIZE oversize, $N_CANDIDATE candidates"
+  echo "--- Results: $N_STALE stale, $N_TRIAGE triage, $N_NEEDS_MCP need-mcp, $N_SKIP skipped, $N_VERIFIED verified, $N_OVERSIZE oversize, $N_CANDIDATE candidates"
   [ "$N_TRIAGE" -gt 0 ] && echo "Run /memory-audit to resolve the TRIAGE entries and give them verify: blocks."
   if [ "$N_OVERSIZE" -gt 0 ] && [ "$CURATE" -eq 0 ]; then
-    echo "The index is over its load limit. Re-run with --curate to see which memories cover the same ticket."
+    echo "The index is over its load limit, so its tail is dropped at session start."
+    echo "One line per memory, so shortening hooks cannot fix the LINE limit. Order the"
+    echo "index by type first, so what falls off is cheap, then retire settled entries."
   fi
 fi
 
 [ "$N_STALE" -gt 0 ] && exit 1
-[ $((N_TRIAGE + N_SKIP + N_OVERSIZE)) -gt 0 ] && exit 2
+[ $((N_TRIAGE + N_SKIP + N_NEEDS_MCP + N_OVERSIZE)) -gt 0 ] && exit 2
 exit 0

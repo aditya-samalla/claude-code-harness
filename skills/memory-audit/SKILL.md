@@ -46,14 +46,21 @@ back to `memory-verify.sh` in a checkout of the harness repo.
 
 Each line is `{status, store, file, detail}`. Handle by status:
 
+Each finding means exactly one thing — a queue with mixed meanings gets ignored:
+
 - `STALE` — already proven wrong. Go straight to step 3.
-- `TRIAGE` — no `verify:` block; needs steps 2 and 3.
-- `SKIP` — could not be resolved mechanically. Issue-tracker claims land here
-  because trackers are reachable only over MCP, not from a shell script;
-  resolve those with whichever tracker MCP is connected.
+- `TRIAGE` — asserts open state with no `verify:` block, so nothing can check
+  it. Needs steps 2 and 3. **Not age-gated**: a claim about something still
+  open, with no way to verify it, is a defect the moment it is written, not
+  after two weeks. This corpus held a memory asserting three PRs were open when
+  all three had merged the same day.
+- `NEEDS_MCP` — a well-formed claim only this skill can resolve, because
+  trackers are reachable over MCP and not from a shell script. Resolve with
+  whichever tracker MCP is connected.
+- `SKIP` — malformed or unrecognised claim. The memory itself needs fixing.
 - `VERIFIED` — nothing to do.
 - `OVERSIZE` — the store's index is past a load limit; see step 6.
-- `CANDIDATE` — advisory, `--curate` only: two memories about one ticket.
+- `CANDIDATE` — advisory, `--curate` only: two memories making the same claims.
 
 **2. Work out what the memory actually claims.**
 
@@ -150,19 +157,35 @@ reports this as `OVERSIZE` on every run, naming which limit and by how much.
 
 **One line per memory means a store with more than ~200 memories cannot comply
 by shortening hooks.** Trimming entry text buys headroom on the *character*
-limit only. Getting under the line limit requires fewer entries, which means
-consolidation — so `--curate` reports which memories are about the same ticket:
+limit only.
+
+**Fix the ORDER before trying to fix the size.** Truncation is tail-first, so an
+index in append order drops its NEWEST entries. Measured on a real 218-memory
+store: 19 entries fell past the cut and five were `feedback_` memories — rules
+about how to work, which do nothing unless they are loaded. Ordering the index
+ACTIVE → `feedback` → `reference` → `project` costs nothing, changes no content,
+and makes whatever falls off the cheapest thing available.
+
+Only then look at shedding entries. `--curate` reports pairs of memories making
+the same claims:
 
 ```bash
 bash ~/.claude/memory-verify.sh --store <slug> --curate
 ```
 
-Grouping is taken from each memory's `name`/`description`, not its body: a
-ticket cited in prose is a reference, a ticket named in the description is what
-the memory is *about*. Merging a group is an ordinary edit — fold the two
-bodies into one file, keep both sets of lessons, delete the file that lost, and
-update its index line per step 5. Confirm with the user first, as with any
-deletion.
+Pairs are grouped on **shared verbatim claims**, not on a shared ticket key.
+Ticket key was tried first and was wrong: of four groups it produced on a real
+store, the one genuine pair shared four verbatim claims and the other three
+shared none. Two memories citing one ticket usually means one records the fix
+and the other a lesson learned beside it — different content, correctly separate
+files. Merging a real pair is an ordinary edit: fold the bodies into one file,
+keep both sets of lessons, delete the file that lost, and update its index line
+per step 5. Confirm with the user first, as with any deletion.
+
+Expect `--curate` to find nothing on a healthy store. Measured across 1,328
+distinct claims in one corpus, six appeared in more than one memory and five of
+those were a single pair. **Real memory corpora are not redundant, so compaction
+does not reclaim index lines** — retiring settled entries does.
 
 **Why there is no "retire this memory" suggestion.** It was built and removed.
 Staleness is not the test: an audit of a real 204-memory store found four

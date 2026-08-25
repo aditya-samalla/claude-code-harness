@@ -121,7 +121,9 @@ mem unknown.md 40 "verify:" "  - notion abc123 done"
 mem broken.md  40 "verify:" "  - gh acme/api#4821"
 mem gone.md    40 "verify:" "  - gh acme/nope#1 merged"
 OUT=$(run)
-check_contains "jira deferred to the skill"  "Jira is MCP-only"           "$OUT"
+check_contains "jira gets its own finding"   "NEEDS_MCP"                  "$OUT"
+check_contains "and says why"                "only through the Jira MCP"  "$OUT"
+check_absent   "jira is not lumped into SKIP" "SKIP     teststore    jira.md" "$OUT"
 check_contains "unqualified ref refused"     "ref-not-repo-qualified"     "$OUT"
 check_contains "unknown kind refused"        "unknown verify kind"        "$OUT"
 check_contains "malformed claim refused"     "malformed verify claim"     "$OUT"
@@ -129,16 +131,29 @@ check_contains "failed lookup refused"       "lookup-failed"              "$OUT"
 check_eq       "exit 2 when only skips"      "2" "$(run_rc)"
 
 echo ""
-echo "=== Unverified open-state memories are triaged once they have aged ==="
+echo "=== An unverifiable open-state claim is triaged at ANY age ==="
+# Not age-gated on purpose: a claim about something still open, with no verify
+# block to check it against, is a defect the moment it is written. The corpus
+# this was built for held a memory asserting three PRs were open when all three
+# had merged that same day.
 rm -f "$STORE"/*.md
 mem old.md    40 "PENDING: merge, deploy, then live-verify. Refs services #4821."
-mem fresh.md   2 "PENDING: merge, deploy, then live-verify."
+mem fresh.md   0 "PENDING: merge, deploy, then live-verify."
 OUT=$(run)
-check_contains "old one triaged"        "TRIAGE"    "$OUT"
-check_contains "names it"               "old.md"    "$OUT"
-check_contains "reports age"            "40d old"   "$OUT"
-check_absent   "recent one left alone"  "fresh.md"  "$OUT"
-check_eq       "exit 2 on triage"       "2" "$(run_rc)"
+check_contains "old one triaged"          "TRIAGE"    "$OUT"
+check_contains "names it"                 "old.md"    "$OUT"
+check_contains "reports age"              "40d old"   "$OUT"
+check_contains "a same-day one too"       "fresh.md"  "$OUT"
+check_contains "reported as 0d, not hidden" "0d old"  "$OUT"
+check_eq       "exit 2 on triage"         "2" "$(run_rc)"
+
+echo ""
+echo "=== but a durable fact with no liveness claim is still left alone ==="
+rm -f "$STORE"/*.md
+mem durable.md 0 "The consumer runs on one core; measured, not configured."
+OUT=$(run)
+check_absent "no finding for a fresh durable fact" "durable.md" "$OUT"
+check_eq     "exit 0"                              "0" "$(run_rc)"
 
 echo ""
 echo "=== Self-contradiction inside one file is called out ==="
@@ -348,19 +363,47 @@ check_absent "and is silent again at the default char limit" "OVERSIZE" "$OUT"
 # Curation pass. Overlap only — there is deliberately no retirement heuristic.
 # ---------------------------------------------------------------------------
 echo ""
-echo "=== --curate groups memories that are ABOUT the same ticket ==="
+echo "=== --curate groups memories that make the SAME CLAIMS ==="
 rm -f "$STORE"/*.md
-mem_about one.md   40 "PROJ-77" "first half of the work"
-mem_about two.md   40 "PROJ-77" "second half of the work"
-mem_about three.md 40 "PROJ-88" "unrelated, but cites PROJ-77 in passing"
+mem_about one.md   40 "PROJ-77" "**the consumer runs on a single core, measured**" \
+                                "**the tier is discovered by OOM retry, not configured**"
+mem_about two.md   40 "PROJ-77" "restating it: **the consumer runs on a single core, measured**" \
+                                "and **the tier is discovered by OOM retry, not configured**"
 OUT=$(run --curate)
-check_contains "two memories about one ticket are a merge candidate" "merge? 2 memories" "$OUT"
-check_contains "the ticket key is named"                             "PROJ-77"           "$OUT"
-check_contains "both filenames are listed"                           "one.md"            "$OUT"
-check_absent   "a key cited only in the body does not group"         "merge? 3 memories" "$OUT"
-check_absent   "a ticket with a single memory is not a candidate"    "PROJ-88"           "$OUT"
+check_contains "an overlapping pair is a merge candidate" "merge? these two share 2" "$OUT"
+check_contains "the first file is named"                  "one.md"                   "$OUT"
+check_contains "the second file is named"                 "two.md"                   "$OUT"
 
 echo ""
+echo "=== sharing a ticket key but no claims is NOT a merge candidate ==="
+# The heuristic this replaced keyed on ticket number. Measured on a real store
+# that produced four groups, of which three shared zero content: one memory
+# records a fix and another records a lesson learned beside it, and they are
+# correctly separate files.
+rm -f "$STORE"/*.md
+mem_about fix.md    40 "PROJ-77" "**the null check was missing on the boot path**"
+mem_about lesson.md 40 "PROJ-77" "**always read cardinalities before theorising**"
+OUT=$(run --curate)
+check_absent "same ticket alone does not group" "CANDIDATE" "$OUT"
+
+echo ""
+echo "=== a single shared claim is below the threshold ==="
+rm -f "$STORE"/*.md
+mem_about a.md 40 "PROJ-1" "**one identical sentence shared between the pair**"
+mem_about b.md 40 "PROJ-2" "**one identical sentence shared between the pair**"
+OUT=$(run --curate)
+check_absent "one overlap is not enough" "CANDIDATE" "$OUT"
+
+echo ""
+echo "=== short bolded labels do not manufacture overlap ==="
+rm -f "$STORE"/*.md
+mem_about x.md 40 "PROJ-3" "**Note**" "**Why:**" "distinct body one"
+mem_about y.md 40 "PROJ-4" "**Note**" "**Why:**" "distinct body two"
+OUT=$(run --curate)
+check_absent "labels are excluded by the length floor" "CANDIDATE" "$OUT"
+
+echo ""
+
 echo "=== Candidates are advisory: only with --curate, and never a deletion ==="
 OUT=$(run)
 check_absent "no CANDIDATE without the flag" "CANDIDATE" "$OUT"

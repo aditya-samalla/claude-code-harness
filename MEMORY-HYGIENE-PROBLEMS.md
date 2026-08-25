@@ -143,9 +143,9 @@ are worthless unless loaded. Fixed first.
 | 1 · tier-order the index | DONE — pure permutation, 0 feedback below the cut |
 | 2 · `bin/memory-fix.sh` | DONE — 178 repairs on the main store, 45 tests |
 | 3 · generate index from frontmatter | pending |
-| 4 · liveness triage at age zero | pending |
-| 5 · demote settled projects to ARCHIVE.md | pending |
-| 6 · write-time lint hook | pending |
+| 4 · liveness triage at age zero | DONE — un-gated; caught a real drift the same day |
+| 5 · demote settled projects to ARCHIVE.md | measured, not built — see below |
+| 6 · write-time lint hook | DONE — `hooks/memory-lint.sh`, 25 tests, deployed |
 
 Evidence that phases 3 and 6 are both needed: a memory written by the live
 system DURING this session arrived with no `modified:` stamp and a 176-char
@@ -170,3 +170,39 @@ index as a whole has a ~25,000 character limit, and at one line per memory the
 per-line length is the only lever on it: 220 x 110 = 24,200, already at the
 edge. So compose hooks to the budget - but because of the total, not because
 anything truncates a single line.
+
+## Archival cannot fix the index size either
+
+Evidence gathered live from Jira for all 125 ticket keys cited by project
+memories. Applying the rule "every cited ticket terminal AND no open-state
+language in the body":
+
+| | count |
+|---|---|
+| provably settled | **3** |
+| asserts open state in the body | 21 |
+| cites an unresolved or non-existent ticket | 32 |
+
+So demotion sheds **3** index lines, against the ~27 needed. **The corpus is
+mostly live work**, which is the same shape as the duplication finding: neither
+compaction nor archival can bring this index under 200, because the memories are
+neither redundant nor finished.
+
+Two things follow. First, tier-ordering is not a stopgap before the real fix —
+it *is* the fix, because managed truncation of the cheapest tail is the only
+lever that actually exists. Second, 40 of the 60 ANEP keys no longer resolve in
+Jira at all, so a large slice of older project memories can never be proven
+settled; their evidence is gone. An archival tool would be correct but would
+have very little to do, which is why it was measured rather than built.
+
+Verify blocks recording the live Jira evidence were written for the 3.
+
+## A measurement bug worth remembering
+
+The first run of this analysis reported **13** settled, not 3. The Bash tool's
+shell is zsh, which does not word-split unquoted expansions, so `for k in $keys`
+iterated once over the whole multi-line string; `grep "^$k"` then treated the
+embedded newlines as pattern alternatives, matched every key at once, and the
+"is it terminal?" test passed because one of the concatenated statuses was
+`Done`. **The wrong answer had exactly the shape of the right one.** Saved as
+`reference_bash_tool_runs_zsh_no_word_split`.

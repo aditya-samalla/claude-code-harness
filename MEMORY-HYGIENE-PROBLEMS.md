@@ -142,9 +142,9 @@ are worthless unless loaded. Fixed first.
 | 0 · git-init the stores | DONE — 8 stores, 298 files baselined |
 | 1 · tier-order the index | DONE — pure permutation, 0 feedback below the cut |
 | 2 · `bin/memory-fix.sh` | DONE — 178 repairs on the main store, 45 tests |
-| 3 · generate index from frontmatter | pending |
+| 3 · generate index from frontmatter | DONE, scoped — `bin/memory-index.sh` + placement lint |
 | 4 · liveness triage at age zero | DONE — un-gated; caught a real drift the same day |
-| 5 · demote settled projects to ARCHIVE.md | measured, not built — see below |
+| 5 · demote settled projects to ARCHIVE.md | DONE as a `SETTLED` finding; no machinery — see below |
 | 6 · write-time lint hook | DONE — `hooks/memory-lint.sh`, 25 tests, deployed |
 
 Evidence that phases 3 and 6 are both needed: a memory written by the live
@@ -206,3 +206,23 @@ embedded newlines as pattern alternatives, matched every key at once, and the
 "is it terminal?" test passed because one of the concatenated statuses was
 `Done`. **The wrong answer had exactly the shape of the right one.** Saved as
 `reference_bash_tool_runs_zsh_no_word_split`.
+
+## Why the index is not generated
+
+The review's plan was "index generated from frontmatter, hand-editing
+forbidden". That cannot hold here: **Claude Code's own memory writer appends
+index lines itself.** Twice during one session it appended a `project` entry
+into the middle of the `reference` section. A generated index would be violated
+by the platform on the very next memory write, and the only way to hold the
+invariant would be to let the lint hook rewrite the index — giving up the
+property that makes it safe.
+
+So the index stays hand-writable and the ordering is *enforced* rather than
+assumed: `bin/memory-index.sh --check|--write` re-sorts as a pure permutation,
+and the write-time hook flags an entry filed under the wrong type marker. It
+caught a real one immediately.
+
+The one-time rewrite of ~80 descriptions into state-free cues was also dropped.
+Descriptions run long by convention (median 167 chars, p75 201) and are not the
+hook — it is the **index line** that carries the budget, and that is now checked
+directly, along with volatile state in the hook itself.

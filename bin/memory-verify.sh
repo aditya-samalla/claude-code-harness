@@ -24,6 +24,11 @@
 #   --store SLUG  only this store (default: every store under ~/.claude/projects)
 #   --json        one JSON object per finding, for the skill to consume
 #   --all         also list VERIFIED memories (default: only what needs attention)
+#   --curate      also propose retirement + merge candidates (advisory, never deletes)
+#
+# The index has TWO limits and the line one usually binds first: 200 lines and
+# ~25,000 characters. One line per memory means a store with more than ~200
+# memories cannot comply by shortening hooks — only by consolidating them.
 #
 # Exit: 0 nothing needs attention · 1 at least one STALE · 2 only TRIAGE/SKIP
 #       3 could not run
@@ -37,12 +42,18 @@ AS_JSON=0
 SHOW_ALL=0
 # Age below which an unverified open-state claim is not worth flagging yet.
 TRIAGE_MIN_AGE_DAYS="${MEMORY_TRIAGE_MIN_AGE_DAYS:-14}"
+# Index load limits. Past either one the tail is silently dropped at session
+# start, so the oldest entries stop reaching the model.
+INDEX_MAX_LINES="${MEMORY_INDEX_MAX_LINES:-200}"
+INDEX_MAX_CHARS="${MEMORY_INDEX_MAX_CHARS:-25000}"
+CURATE=0
 
 while [ $# -gt 0 ]; do
   case "$1" in
     --store) ONLY_STORE="${2:-}"; shift 2 ;;
     --json)  AS_JSON=1; shift ;;
     --all)   SHOW_ALL=1; shift ;;
+    --curate) CURATE=1; shift ;;
     -h|--help) sed -n '2,30p' "$0"; exit 0 ;;
     *) echo "unknown argument: $1" >&2; exit 3 ;;
   esac
@@ -66,6 +77,8 @@ N_STALE=0
 N_TRIAGE=0
 N_SKIP=0
 N_VERIFIED=0
+N_OVERSIZE=0
+N_CANDIDATE=0
 HEADER_SHOWN=""
 
 # Emit one finding. Fields are positional to stay bash-3.2 friendly.
@@ -76,6 +89,8 @@ emit() {
     TRIAGE)   N_TRIAGE=$((N_TRIAGE+1)) ;;
     SKIP)     N_SKIP=$((N_SKIP+1)) ;;
     VERIFIED) N_VERIFIED=$((N_VERIFIED+1)); [ "$SHOW_ALL" -eq 1 ] || return 0 ;;
+    OVERSIZE) N_OVERSIZE=$((N_OVERSIZE+1)) ;;
+    CANDIDATE) N_CANDIDATE=$((N_CANDIDATE+1)) ;;
   esac
   if [ "$AS_JSON" -eq 1 ]; then
     jq -nc --arg s "$status" --arg st "$store" --arg f "$file" --arg d "$detail" \
@@ -161,6 +176,18 @@ OPEN_RE='\b(pending|draft pr|awaiting|not yet (merged|deployed|landed|shipped)|b
 # "resolved" — matching it would invert the signal entirely.
 CLOSED_RE='\b(merged|shipped|deployed|landed|resolved|verified in prod)\b'
 
+# There is deliberately NO "retire this memory" heuristic here, and the reason
+# is worth recording so the idea is not re-invented. Staleness is not the test:
+# an audit of a real 204-memory store found four verifiably stale memories and
+# zero deletable ones, because in every case the lesson outlived the ticket.
+# The obvious fallback — "settled outcome AND no lesson-shaped wording" — was
+# built and then removed: it flagged a memory recording a verified pipeline
+# MISMATCH and another recording that a table is absent from the lakehouse, so
+# a conversion is blocked. Both are durable FACTS carrying no lesson-shaped
+# words. No wordlist separates a pure status record from a durable fact, and a
+# wrong suggestion here costs knowledge that cannot be recovered. Retirement
+# stays a human judgement; this script only surfaces size pressure and overlap.
+
 # The index is skipped as a memory (it is a list of links, not a claim), which
 # left a blind spot: a stale claim written into an index one-liner was never
 # examined at all — and the index is the part loaded into context every single
@@ -190,6 +217,64 @@ scan_index() {
       emit TRIAGE "$slug" "MEMORY.md:$n" "index line asserts open state"
     fi
   done < "$idx"
+}
+
+# The index is the one file loaded into context every session, so passing
+# either limit silently truncates its tail — the oldest hooks simply stop
+# arriving, with no error at the point of use. Checked per store, because
+# each store carries its own index.
+scan_index_size() {
+  local dir="$1" slug="$2"
+  local idx="$dir/MEMORY.md"
+  [ -f "$idx" ] || return 0
+  local lines chars entries over
+  lines=$(wc -l < "$idx" | tr -d ' ')
+  chars=$(wc -c < "$idx" | tr -d ' ')
+  entries=$(grep -c '^- \[' "$idx" 2>/dev/null || true)
+  over=""
+  [ "$lines" -gt "$INDEX_MAX_LINES" ] && over="${lines}/${INDEX_MAX_LINES} lines"
+  if [ "$chars" -gt "$INDEX_MAX_CHARS" ]; then
+    [ -n "$over" ] && over="$over, "
+    over="${over}${chars}/${INDEX_MAX_CHARS} chars"
+  fi
+  [ -n "$over" ] || return 0
+  emit OVERSIZE "$slug" "MEMORY.md" \
+    "index over the load limit ($over; $entries entries) — the tail is dropped at session start. One line per memory, so shortening hooks cannot fix the LINE limit; consolidate with --curate."
+}
+
+# Advisory overlap pass. Answers one question a size problem actually turns
+# on: are two memories about the same ticket, and could they be one file?
+# Reports only — see the note above on why retirement is not automated.
+scan_curation() {
+  local dir="$1" slug="$2" f base keys k
+  local tmp="${TMPDIR:-/tmp}/mv-keys.$$"
+  : > "$tmp"
+
+  for f in "$dir"/*.md; do
+    [ -f "$f" ] || continue
+    base=$(basename "$f")
+    [ "$base" = "MEMORY.md" ] && continue
+
+    # Keys from the name/description only. A ticket cited in the body is a
+    # reference; one named in the description is what the memory is ABOUT.
+    keys=$(sed -n '1,12p' "$f" | grep -E '^(name|description):' \
+             | grep -oE '[A-Z]{2,10}-[0-9]{2,6}' | sort -u)
+    for k in $keys; do
+      printf '%s\t%s\n' "$k" "$base" >> "$tmp"
+    done
+  done
+
+  # Group by ticket key. Written to a file and read back by redirect, not by
+  # pipe: a piped `while` runs in a subshell and emit's counters would vanish.
+  sort -u "$tmp" | awk -F'\t' '
+    { seen[$1] = seen[$1] " " $2; n[$1]++ }
+    END { for (key in n) if (n[key] > 1) printf "%s\t%d\t%s\n", key, n[key], seen[key] }
+  ' | sort > "$tmp.g"
+  while IFS="$(printf '\t')" read -r k cnt files; do
+    [ -z "$k" ] && continue
+    emit CANDIDATE "$slug" "$k" "merge? $cnt memories are about this ticket:$files"
+  done < "$tmp.g"
+  rm -f "$tmp" "$tmp.g"
 }
 
 scan_store() {
@@ -274,6 +359,8 @@ for store in "$PROJECTS"/*; do
   STORES_SCANNED=$((STORES_SCANNED+1))
   scan_store "$store/memory" "$slug"
   scan_index "$store/memory" "$slug"
+  scan_index_size "$store/memory" "$slug"
+  if [ "$CURATE" -eq 1 ]; then scan_curation "$store/memory" "$slug"; fi
 done
 
 # A mistyped slug must not exit 0 — silence would read as "nothing is stale"
@@ -289,10 +376,13 @@ fi
 
 if [ "$AS_JSON" -eq 0 ]; then
   echo ""
-  echo "--- Results: $N_STALE stale, $N_TRIAGE triage, $N_SKIP skipped, $N_VERIFIED verified"
+  echo "--- Results: $N_STALE stale, $N_TRIAGE triage, $N_SKIP skipped, $N_VERIFIED verified, $N_OVERSIZE oversize, $N_CANDIDATE candidates"
   [ "$N_TRIAGE" -gt 0 ] && echo "Run /memory-audit to resolve the TRIAGE entries and give them verify: blocks."
+  if [ "$N_OVERSIZE" -gt 0 ] && [ "$CURATE" -eq 0 ]; then
+    echo "The index is over its load limit. Re-run with --curate for retirement and merge candidates."
+  fi
 fi
 
 [ "$N_STALE" -gt 0 ] && exit 1
-[ $((N_TRIAGE + N_SKIP)) -gt 0 ] && exit 2
+[ $((N_TRIAGE + N_SKIP + N_OVERSIZE)) -gt 0 ] && exit 2
 exit 0

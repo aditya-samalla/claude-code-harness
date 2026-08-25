@@ -288,5 +288,91 @@ check_contains "says the store is missing" "no store named" "$OUT"
 check_eq       "exit 3, not 0"             "3" "$RC"
 
 echo ""
+
+# ---------------------------------------------------------------------------
+# Index load limits. The index is the only file pulled into context every
+# session, so passing either limit truncates its tail silently.
+# ---------------------------------------------------------------------------
+mem_about() {  # mem_about <filename> <age_days> <ticket-key> <body...>
+  local name="$1" age="$2" key="$3"; shift 3
+  {
+    echo "---"
+    echo "name: ${name%.md}"
+    echo "description: $key fixture"
+    echo "metadata:"
+    echo "  type: project"
+    echo "  modified: $(days_ago "$age")"
+    echo "---"
+    printf '%s\n' "$@"
+  } > "$STORE/$name"
+}
+
+rm -f "$STORE"/*.md
+mem a.md 1 "plain body"
+
+echo ""
+echo "=== An index inside both limits is not flagged ==="
+echo "- [a](a.md) — hook" > "$STORE/MEMORY.md"
+OUT=$(run)
+check_absent "no OVERSIZE for a small index" "OVERSIZE" "$OUT"
+
+echo ""
+echo "=== An index past the LINE limit is OVERSIZE ==="
+i=0; : > "$STORE/MEMORY.md"
+while [ "$i" -lt 205 ]; do echo "- [a](a.md) — hook" >> "$STORE/MEMORY.md"; i=$((i+1)); done
+export MEMORY_INDEX_MAX_LINES=200
+OUT=$(run)
+check_contains "flagged"                 "OVERSIZE"        "$OUT"
+check_contains "names the line count"    "205/200 lines"   "$OUT"
+check_contains "counts the entries"      "205 entries"     "$OUT"
+check_contains "says shortening hooks cannot fix it" "shortening hooks cannot fix" "$OUT"
+RC=$(run_rc)
+check_eq "oversize alone still exits 2 (needs attention)" "2" "$RC"
+unset MEMORY_INDEX_MAX_LINES
+
+echo ""
+echo "=== An index past the CHAR limit is OVERSIZE even when the line count is fine ==="
+: > "$STORE/MEMORY.md"
+LONG=$(printf 'x%.0s' 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0)
+i=0
+while [ "$i" -lt 10 ]; do echo "- [a](a.md) — $LONG" >> "$STORE/MEMORY.md"; i=$((i+1)); done
+export MEMORY_INDEX_MAX_CHARS=100
+OUT=$(run)
+check_contains "flagged on chars"     "OVERSIZE" "$OUT"
+check_contains "names the char limit" "/100 chars" "$OUT"
+unset MEMORY_INDEX_MAX_CHARS
+OUT=$(run)
+check_absent "and is silent again at the default char limit" "OVERSIZE" "$OUT"
+
+# ---------------------------------------------------------------------------
+# Curation pass. Overlap only — there is deliberately no retirement heuristic.
+# ---------------------------------------------------------------------------
+echo ""
+echo "=== --curate groups memories that are ABOUT the same ticket ==="
+rm -f "$STORE"/*.md
+mem_about one.md   40 "PROJ-77" "first half of the work"
+mem_about two.md   40 "PROJ-77" "second half of the work"
+mem_about three.md 40 "PROJ-88" "unrelated, but cites PROJ-77 in passing"
+OUT=$(run --curate)
+check_contains "two memories about one ticket are a merge candidate" "merge? 2 memories" "$OUT"
+check_contains "the ticket key is named"                             "PROJ-77"           "$OUT"
+check_contains "both filenames are listed"                           "one.md"            "$OUT"
+check_absent   "a key cited only in the body does not group"         "merge? 3 memories" "$OUT"
+check_absent   "a ticket with a single memory is not a candidate"    "PROJ-88"           "$OUT"
+
+echo ""
+echo "=== Candidates are advisory: only with --curate, and never a deletion ==="
+OUT=$(run)
+check_absent "no CANDIDATE without the flag" "CANDIDATE" "$OUT"
+OUT=$(run --curate)
+check_absent "never proposes retirement"     "retire?"   "$OUT"
+
+echo ""
+echo "=== --curate still modifies nothing ==="
+SUM_BEFORE=$(cat "$STORE"/*.md | shasum | awk '{print $1}')
+run --curate >/dev/null 2>&1
+SUM_AFTER=$(cat "$STORE"/*.md | shasum | awk '{print $1}')
+check_eq "memories are byte-identical after a curate run" "$SUM_BEFORE" "$SUM_AFTER"
+
 echo "--- Results: $PASS passed, $FAIL failed"
 exit "$FAIL"

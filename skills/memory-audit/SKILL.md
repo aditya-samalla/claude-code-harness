@@ -38,6 +38,7 @@ behind on every file you touch, even one you conclude is still accurate.
 ```bash
 bash ~/.claude/memory-verify.sh --json                  # every store
 bash ~/.claude/memory-verify.sh --json --store <slug>   # one store
+bash ~/.claude/memory-verify.sh --store <slug> --curate  # + index size and merge candidates
 ```
 
 If that path does not exist, the harness is not installed on this machine; fall
@@ -51,6 +52,8 @@ Each line is `{status, store, file, detail}`. Handle by status:
   because trackers are reachable only over MCP, not from a shell script;
   resolve those with whichever tracker MCP is connected.
 - `VERIFIED` — nothing to do.
+- `OVERSIZE` — the store's index is past a load limit; see step 6.
+- `CANDIDATE` — advisory, `--curate` only: two memories about one ticket.
 
 **2. Work out what the memory actually claims.**
 
@@ -130,6 +133,47 @@ at already recorded that PR as merged and validated.
 
 The index gets no `verify:` block of its own — put that on the memory it links
 to, and keep the hook consistent with it.
+
+
+**6. Check the index against its load limits.**
+
+The index has two, and the line one usually binds first:
+
+| | limit |
+|---|---|
+| lines | **200** |
+| characters | **~25,000** |
+
+Past either, the tail is dropped silently at session start — the oldest hooks
+simply stop reaching the model, with no error where it is used. `memory-verify.sh`
+reports this as `OVERSIZE` on every run, naming which limit and by how much.
+
+**One line per memory means a store with more than ~200 memories cannot comply
+by shortening hooks.** Trimming entry text buys headroom on the *character*
+limit only. Getting under the line limit requires fewer entries, which means
+consolidation — so `--curate` reports which memories are about the same ticket:
+
+```bash
+bash ~/.claude/memory-verify.sh --store <slug> --curate
+```
+
+Grouping is taken from each memory's `name`/`description`, not its body: a
+ticket cited in prose is a reference, a ticket named in the description is what
+the memory is *about*. Merging a group is an ordinary edit — fold the two
+bodies into one file, keep both sets of lessons, delete the file that lost, and
+update its index line per step 5. Confirm with the user first, as with any
+deletion.
+
+**Why there is no "retire this memory" suggestion.** It was built and removed.
+Staleness is not the test: an audit of a real 204-memory store found four
+verifiably stale memories and *zero* deletable ones, because in every case the
+lesson outlived the ticket. The fallback test — settled outcome plus no
+lesson-shaped wording — then flagged a memory recording a verified pipeline
+mismatch, and another recording that a table is absent from the lakehouse so a
+conversion is blocked. Both are durable facts that happen to contain no
+lesson-shaped words. No wordlist separates a pure status record from a durable
+fact, and a wrong suggestion costs knowledge that cannot be recovered. Deciding
+what to retire stays yours.
 
 ## Rules
 

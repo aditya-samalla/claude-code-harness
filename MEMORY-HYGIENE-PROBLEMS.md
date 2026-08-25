@@ -151,3 +151,22 @@ Evidence that phases 3 and 6 are both needed: a memory written by the live
 system DURING this session arrived with no `modified:` stamp and a 176-char
 index line appended blindly to the end of the file — past the truncation cut,
 in the section reserved for a different type.
+
+## Correction: nothing clips an index line on the way in
+
+The review said the injected copy clips lines at ~115 chars and that a previous
+char-limit fix had hard-clipped hooks in the file. Checked against this
+session's own injected index: the line
+
+    - [BATCH_METADATA carries cypher timings](...) — per-policy ms ALREADY
+
+is 109 characters and arrived **byte-identical** to the file. There is no
+injection-side per-line clipping. The mid-clause hooks are an authoring
+artifact - hooks were hand-clipped to a ~110 char budget when written, and the
+corpus shows it: median 106 chars, p90 110, and only 6 of 220 lines above it.
+
+The budget is still worth enforcing, for a different reason than assumed. The
+index as a whole has a ~25,000 character limit, and at one line per memory the
+per-line length is the only lever on it: 220 x 110 = 24,200, already at the
+edge. So compose hooks to the budget - but because of the total, not because
+anything truncates a single line.

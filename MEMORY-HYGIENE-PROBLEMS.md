@@ -226,3 +226,38 @@ The one-time rewrite of ~80 descriptions into state-free cues was also dropped.
 Descriptions run long by convention (median 167 chars, p75 201) and are not the
 hook — it is the **index line** that carries the budget, and that is now checked
 directly, along with volatile state in the hook itself.
+
+## Applying it to the existing corpus, 2026-08-25
+
+Ran the whole toolchain across all 8 stores, 295 memories. Corpus-wide findings
+went from **133 to 29**, and roughly half of that came from fixing the TOOLS
+rather than the memories — three separate cases where the checks disagreed with
+each other or cried wolf:
+
+| | |
+|---|---|
+| index-line budget enforced on tiny indexes | 72 findings, all pointless. The budget exists because the index as a WHOLE is capped near 25,000 chars; seven stores run 269–6,784. Now gated on actual pressure. |
+| `type:` parsed two ways | `memory-index` matched only the nested form, filed 13 older memories under REFERENCE, and `memory-lint` — permissive — called all 13 misfiled. Two tools disagreeing about what a memory IS is worse than either being wrong alone. |
+| untyped placement double-reported | `memory-index` files untyped entries under REFERENCE deliberately; `memory-lint` then flagged that placement as a second defect. |
+| bare `pending` in the state wordlist | two thirds noise; memories describe review states constantly. Also found the description and hook checks each carried their own drifted copy of the list. |
+
+**A finding that can never be actioned is itself noise.** 58 memories had no
+`modified:` and an mtime reset to today, so the guard refused all of them
+forever. A memory cannot predate the events it records, so `memory-fix` now
+falls back to the latest date written INSIDE the memory, capped at today and
+tagged `modified_source: content`. That resolved 46; the remaining 12 carry no
+date anywhere and stay unstamped, because no date still beats an invented one.
+
+Also applied: index ordering to all 8 stores, hooks composed to budget rather
+than hand-clipped, three descriptions rewritten from status ledgers into
+state-free cues, two orphaned memories indexed, and verify blocks recorded from
+live Jira and GitHub. Every `jira` claim in the corpus was checked against live
+Jira; all agree.
+
+**What is left: 17 liveness claims with no `verify:` block.** Each needs a
+per-memory GitHub or Jira lookup, which is the audit skill's job, not a script's.
+
+The hook proved itself while this ran: seven memories written by other live
+sessions arrived mid-session with missing stamps, 154–1,160-character index
+lines, and unverifiable liveness claims. All were caught and fixed as they
+landed.

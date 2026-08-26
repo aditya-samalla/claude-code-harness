@@ -137,8 +137,8 @@ echo "=== An unverifiable open-state claim is triaged at ANY age ==="
 # this was built for held a memory asserting three PRs were open when all three
 # had merged that same day.
 rm -f "$STORE"/*.md
-mem old.md    40 "PENDING: merge, deploy, then live-verify. Refs services #4821."
-mem fresh.md   0 "PENDING: merge, deploy, then live-verify."
+mem old.md    40 "Still pending: merge, deploy, then live-verify. Refs services #4821."
+mem fresh.md   0 "Still pending: merge, deploy, then live-verify."
 OUT=$(run)
 check_contains "old one triaged"          "TRIAGE"    "$OUT"
 check_contains "names it"                 "old.md"    "$OUT"
@@ -146,6 +146,27 @@ check_contains "reports age"              "40d old"   "$OUT"
 check_contains "a same-day one too"       "fresh.md"  "$OUT"
 check_contains "reported as 0d, not hidden" "0d old"  "$OUT"
 check_eq       "exit 2 on triage"         "2" "$(run_rc)"
+
+echo "=== describing GitHub's own states is not a liveness claim ==="
+# A bare "pending" used to be enough. Memories talk about review states
+# constantly, so it was two thirds noise, and a finding that cries wolf is one
+# nobody reads.
+rm -f "$STORE"/*.md
+mem describes.md 40 "MERGEABLE just means required checks are pending — the healthy state." \
+                    "A required check may be missing, pending, or failed."
+OUT=$(run)
+check_absent "descriptive uses are ignored" "describes.md" "$OUT"
+check_eq     "exit 0"                       "0" "$(run_rc)"
+
+rm -f "$STORE"/*.md
+mem real.md 40 "Shipped, pending review: services#4821." 
+check_contains "an actual liveness construction still fires" "TRIAGE" "$(run)"
+
+rm -f "$STORE"/*.md
+mem real2.md 40 "The rollout is still pending."
+check_contains "so does 'still pending'" "TRIAGE" "$(run)"
+
+echo ""
 
 echo ""
 echo "=== but a durable fact with no liveness claim is still left alone ==="
@@ -158,15 +179,15 @@ check_eq     "exit 0"                              "0" "$(run_rc)"
 echo ""
 echo "=== Self-contradiction inside one file is called out ==="
 rm -f "$STORE"/*.md
-mem both.md 40 "PENDING: awaiting review." "" "Update: merged and verified in prod."
+mem both.md 40 "Still pending: awaiting review." "" "Update: merged and verified in prod."
 OUT=$(run)
 check_contains "contradiction noted" "self-contradictory" "$OUT"
 
 echo ""
 echo "=== Reference list is trimmed of noise and capped ==="
 rm -f "$STORE"/*.md
-mem noisy.md 40 "PENDING." "Hashes are SHA-256 and stamps are ISO-8601. See #1441 #1458."
-mem many.md  40 "PENDING." "#1001 #1002 #1003 #1004 #1005 #1006 #1007 #1008 #1009 #1010"
+mem noisy.md 40 "Still pending." "Hashes are SHA-256 and stamps are ISO-8601. See #1441 #1458."
+mem many.md  40 "Still pending." "#1001 #1002 #1003 #1004 #1005 #1006 #1007 #1008 #1009 #1010"
 OUT=$(run)
 check_absent   "standards tokens dropped" "SHA-256"       "$OUT"
 check_absent   "iso token dropped"        "ISO-8601"      "$OUT"
@@ -189,7 +210,7 @@ check_absent "verify block in the index is not resolved" "STALE" "$OUT"
 check_eq     "nothing to report"                          "0" "$(run_rc)"
 
 rm -f "$STORE"/*.md
-printf -- "- [Gone](gone.md) — PENDING, awaiting review\n" > "$STORE/MEMORY.md"
+printf -- "- [Gone](gone.md) — still pending, awaiting review\n" > "$STORE/MEMORY.md"
 OUT=$(run)
 check_contains "claim about a missing target still flagged" "MEMORY.md:1" "$OUT"
 
@@ -234,7 +255,7 @@ check_contains "still reports totals" "0 stale, 0 triage" "$OUT"
 echo ""
 echo "=== State words are matched on word boundaries ==="
 rm -f "$STORE"/*.md
-mem unres.md 40 "PENDING review. The root cause is still unresolved."
+mem unres.md 40 "Pending review. The root cause is still unresolved."
 OUT=$(run)
 check_contains "still triaged"                    "unres.md"           "$OUT"
 check_absent   "'unresolved' is not closed state" "self-contradictory" "$OUT"
@@ -258,7 +279,7 @@ check_absent "'held' as a disposition label"    "disposn.md" "$OUT"
 echo ""
 echo "=== but the terms that earn their place still fire ==="
 rm -f "$STORE"/*.md
-mem p1.md 40 "PENDING: merge and release."
+mem p1.md 40 "Pending release: the cut has not gone out."
 mem p2.md 40 "Notebook committed but NOT pushed — awaiting a go for push/PR."
 mem p3.md 40 "Shipped behind draft PR 1493; do not land yet."
 OUT=$(run)

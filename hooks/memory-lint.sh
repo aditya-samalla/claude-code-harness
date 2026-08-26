@@ -84,7 +84,11 @@ else
 fi
 
 # --- unverifiable liveness claims ----------------------------------------
-OPEN_RE='\b(pending|draft pr|awaiting|not yet (merged|deployed|landed|shipped)|blocked on|still open|will land)\b'
+# A bare "pending" was in this list and was two thirds noise: memories describe
+# GitHub's own states constantly ("required checks are pending - that is the
+# healthy state", "a required check is missing, pending, or failed"). A finding
+# that cries wolf gets ignored, so only liveness CONSTRUCTIONS count now.
+OPEN_RE='\b(pending (review|merge|approval|deploy|release|sign-?off)|(is|still) pending|draft pr|awaiting|not yet (merged|deployed|landed|shipped)|blocked on|still open|will land)\b'
 if grep -qiE "$OPEN_RE" "$FILE" && ! grep -q '^verify:' "$FILE"; then
   add "asserts work still in flight but carries no \`verify:\` block, so nothing can ever check it. Add one, e.g. \`  - gh owner/repo#123 open\` or \`  - jira PROJ-1 In Progress\`."
 fi

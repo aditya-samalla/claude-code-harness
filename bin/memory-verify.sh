@@ -185,7 +185,11 @@ resolve_gh() {
 # included/held/skipped list) and not one true positive. Every genuine stale
 # claim in that sample was caught by pending / awaiting / draft pr. Prose reuses
 # state words freely, so a term only earns its place if it survives real text.
-OPEN_RE='\b(pending|draft pr|awaiting|not yet (merged|deployed|landed|shipped)|blocked on|still open|will land)\b'
+# A bare "pending" was in this list and was two thirds noise: memories describe
+# GitHub's own states constantly ("required checks are pending - that is the
+# healthy state", "a required check is missing, pending, or failed"). A finding
+# that cries wolf gets ignored, so only liveness CONSTRUCTIONS count now.
+OPEN_RE='\b(pending (review|merge|approval|deploy|release|sign-?off)|(is|still) pending|draft pr|awaiting|not yet (merged|deployed|landed|shipped)|blocked on|still open|will land)\b'
 # Closed-state language. Co-occurrence with the above inside one file is the
 # append-don't-revise contradiction: an update was added, the stale sentence
 # stayed. Boundaried for the same reason, and because "unresolved" contains

@@ -103,6 +103,19 @@ check_absent "silent once a block exists" "verify\` block" "$(lint "$STORE/withb
 write_mem durable "a durable measured fact" "The consumer runs on one core. Measured."
 check_absent "a durable fact needs no block" "verify" "$(lint "$STORE/durable.md")"
 
+echo "=== describing review states is not a liveness claim ==="
+# A bare "pending" was two thirds noise on a real corpus: memories describe
+# GitHub's own states constantly. Only liveness constructions count.
+: > "$STORE/MEMORY.md"
+write_mem describes "a description" "MERGEABLE just means required checks are pending — the healthy state."
+check_absent "descriptive use ignored" "verify\` block" "$(lint "$STORE/describes.md")"
+
+: > "$STORE/MEMORY.md"
+write_mem awaiting_review "a description" "Shipped, pending review: acme/api#1."
+check_contains "a real construction still fires" "no \`verify:\` block" "$(lint "$STORE/awaiting_review.md")"
+
+echo ""
+
 echo ""
 echo "=== links: a separator typo is a defect, a missing target is not ==="
 : > "$STORE/MEMORY.md"

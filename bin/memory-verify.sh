@@ -129,7 +129,13 @@ age_days() {
   stamp=$(sed -n 's/^[[:space:]]*modified:[[:space:]]*//p' "$f" 2>/dev/null | head -1 | tr -d '"')
   epoch=""
   if [ -n "$stamp" ]; then
+    # Three forms, because two writers disagree: Claude Code stamps an ISO
+    # datetime, memory-fix stamps a bare date. BSD `date -f` needs a format that
+    # matches the WHOLE string, so a datetime format silently rejects a bare
+    # date - which then fell through to mtime, i.e. to the day the last rewrite
+    # ran. That made every backfilled stamp read as 0d old.
     epoch=$(date -j -f '%Y-%m-%dT%H:%M:%S' "${stamp%%.*}" +%s 2>/dev/null) \
+      || epoch=$(date -j -f '%Y-%m-%d' "${stamp%%T*}" +%s 2>/dev/null) \
       || epoch=$(date -d "$stamp" +%s 2>/dev/null) || epoch=""
   fi
   if [ -z "$epoch" ]; then

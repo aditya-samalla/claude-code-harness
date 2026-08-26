@@ -147,6 +147,34 @@ check_contains "a same-day one too"       "fresh.md"  "$OUT"
 check_contains "reported as 0d, not hidden" "0d old"  "$OUT"
 check_eq       "exit 2 on triage"         "2" "$(run_rc)"
 
+echo ""
+echo "=== Age parses both stamp formats, not just the one this suite writes ==="
+# Two writers stamp `modified:` and they disagree: Claude Code writes an ISO
+# datetime, memory-fix writes a bare date. BSD `date -f` requires the format to
+# match the whole string, so the datetime format rejected a bare date and age
+# fell through to mtime - the day of the last rewrite. Every stamp memory-fix
+# backfilled therefore read as 0d old; the worst real case understated an
+# 83-day-old memory as same-day, which is precisely what the staleness gate
+# exists to catch.
+#
+# It survived 97 checks because days_ago() only ever emitted the format that
+# parsed. The helper encoded the assumption, so the suite could not see past it.
+rm -f "$STORE"/*.md
+bare_stamp() { date -v-"$1"d +%Y-%m-%d 2>/dev/null || date -d "$1 days ago" +%Y-%m-%d; }
+{ echo "---"
+  echo "name: bare"
+  echo "description: a memory stamped the way memory-fix stamps them"
+  echo "metadata:"
+  echo "  type: project"
+  echo "  modified: $(bare_stamp 40)"
+  echo "---"
+  echo "Still pending: merge, deploy, then live-verify."
+} > "$STORE/bare.md"
+OUT=$(run)
+check_contains "bare date is read as its stamp" "40d old" "$OUT"
+# Leading space on purpose: "0d old" is a substring of "40d old".
+check_absent   "not mistaken for same-day"      " 0d old" "$OUT"
+
 echo "=== describing GitHub's own states is not a liveness claim ==="
 # A bare "pending" used to be enough. Memories talk about review states
 # constantly, so it was two thirds noise, and a finding that cries wolf is one

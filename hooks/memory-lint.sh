@@ -46,6 +46,13 @@ INDEX_LINE_MAX="${MEMORY_INDEX_LINE_MAX:-110}"
 INDEX_MAX_CHARS="${MEMORY_INDEX_MAX_CHARS:-25000}"
 INDEX_PRESSURE_CHARS="${MEMORY_INDEX_PRESSURE_CHARS:-20000}"
 INDEX_PRESSURE_LINES="${MEMORY_INDEX_PRESSURE_LINES:-180}"
+
+# Volatile state in a SUMMARY - the description or the index hook. Wider than
+# OPEN_RE, because a summary saying "in progress" or "unreviewed" is a status
+# even when the body is not asserting in-flight work. Kept free of a bare
+# "pending" for the same reason OPEN_RE is: memories describe review states
+# constantly, and a check that cries wolf is one nobody reads.
+STATE_RE='\b(still open|now open|in progress|unreviewed|[0-9]+ prs? open|awaiting|blocked on|not yet (merged|landed|deployed)|pending (review|merge|approval|deploy|release|sign-?off)|(is|still) pending)\b'
 STEM="${BASE%.md}"
 FINDINGS=""
 add() { FINDINGS="${FINDINGS}  - $1
@@ -83,7 +90,7 @@ else
   # No length check here on purpose. The description is the fuller summary and
   # runs long by convention (median 167 chars in a real store); it is the INDEX
   # LINE that gets clipped, and that is checked below.
-  if printf '%s' "$DESC" | grep -qiE '\b(still open|now open|pending|awaiting|in progress|not yet (merged|landed|deployed)|[0-9]+ prs? open|unreviewed|blocked on)\b'; then
+  if printf '%s' "$DESC" | grep -qiE "$STATE_RE"; then
     add "the description asserts changing state. A hook is a retrieval cue, not a status: say what the memory is ABOUT and keep the state in the body next to a \`verify:\` block."
   fi
 fi
@@ -147,7 +154,7 @@ if [ -f "$DIR/MEMORY.md" ]; then
     # the contradiction lives on GitHub. A live index had a hook reading
     # "3 PRs open (#1938 #1608 #29)" pointing at a memory whose own body already
     # said all three had merged, and it sat in the most-read block of the file.
-    if printf '%s' "$IDX" | grep -qiE '\b(still open|now open|pending|awaiting|in progress|not yet (merged|landed|deployed)|[0-9]+ prs? open|unreviewed|blocked on)\b'; then
+    if printf '%s' "$IDX" | grep -qiE "$STATE_RE"; then
       add "its index line asserts changing state. The hook is the one thing loaded into every session and nothing inside the store can ever contradict it — say what the memory is ABOUT and leave the state in the body."
     fi
 

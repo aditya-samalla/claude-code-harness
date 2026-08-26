@@ -143,13 +143,21 @@ echo "=== the index line has a character budget, counted in CHARACTERS ==="
 : > "$STORE/MEMORY.md"
 write_mem budget "a description" "body"
 LONG=$(printf 'x%.0s' $(seq 1 130))
-echo "- [T](budget.md) — $LONG" > "$STORE/MEMORY.md"
-check_contains "over-budget line flagged" "is clipped around 110" "$(lint "$STORE/budget.md")"
 
-: > "$STORE/MEMORY.md"
+# A small index has enormous headroom, so a long hook there costs nothing.
+echo "- [T](budget.md) — $LONG" > "$STORE/MEMORY.md"
+check_absent "a roomy index is not nagged about line length" "per-line length" "$(lint "$STORE/budget.md")"
+
+# Push the index over the pressure threshold; now per-line length is the only
+# lever left on the total, so it is worth saying.
+export MEMORY_INDEX_PRESSURE_CHARS=100
+check_contains "over-budget line flagged under pressure" "per-line length is the only lever" "$(lint "$STORE/budget.md")"
+check_contains "and quantifies the pressure"            "of ~25000"                        "$(lint "$STORE/budget.md")"
+
 DASHES=$(printf '\xe2\x80\x94%.0s' $(seq 1 30))   # 30 em-dashes: 30 chars, 90 bytes
 echo "- [T](budget.md) — $DASHES" > "$STORE/MEMORY.md"
-check_absent "not flagged on byte count" "is clipped around" "$(lint "$STORE/budget.md")"
+check_absent "not flagged on byte count" "per-line length" "$(lint "$STORE/budget.md")"
+unset MEMORY_INDEX_PRESSURE_CHARS
 
 echo ""
 echo "=== an index hook carrying changing state is the drift nothing else catches ==="

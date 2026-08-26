@@ -41,6 +41,11 @@ esac
 
 DIR=$(dirname "$FILE")
 INDEX_LINE_MAX="${MEMORY_INDEX_LINE_MAX:-110}"
+# Same limits memory-verify reports OVERSIZE against; the per-line budget is
+# only enforced once the index approaches them.
+INDEX_MAX_CHARS="${MEMORY_INDEX_MAX_CHARS:-25000}"
+INDEX_PRESSURE_CHARS="${MEMORY_INDEX_PRESSURE_CHARS:-20000}"
+INDEX_PRESSURE_LINES="${MEMORY_INDEX_PRESSURE_LINES:-180}"
 STEM="${BASE%.md}"
 FINDINGS=""
 add() { FINDINGS="${FINDINGS}  - $1
@@ -121,9 +126,21 @@ if [ -f "$DIR/MEMORY.md" ]; then
     # average is the only lever on it: 220 entries x 110 chars is already
     # 24,200. Compose the hook to fit. Hand-clipping to fit is what left a live
     # index with entries ending "per-policy ms ALREADY" and "superset".
-    ILEN=${#IDX}
-    [ "$ILEN" -gt "$INDEX_LINE_MAX" ] \
-      && add "its index line is $ILEN chars and is clipped around $INDEX_LINE_MAX, so the hook is cut mid-clause. Shorten the hook (or the title), do not let it truncate."
+    # The per-line budget exists ONLY because the index as a whole is capped
+    # near 25,000 characters and holds one line per memory, so per-line length
+    # is the single lever on the total. A store with 6 memories and a 2KB index
+    # has enormous headroom, and nagging about a long hook there is noise that
+    # would teach the reader to ignore the check. Measured: enforcing it
+    # unconditionally produced 72 findings across seven small stores, every one
+    # of them pointless. So enforce it only when the index is actually under
+    # pressure.
+    IDX_CHARS=$(wc -c < "$DIR/MEMORY.md" | tr -d ' ')
+    IDX_LINES=$(wc -l < "$DIR/MEMORY.md" | tr -d ' ')
+    if [ "$IDX_CHARS" -ge "$INDEX_PRESSURE_CHARS" ] || [ "$IDX_LINES" -ge "$INDEX_PRESSURE_LINES" ]; then
+      ILEN=${#IDX}
+      [ "$ILEN" -gt "$INDEX_LINE_MAX" ] \
+        && add "its index line is $ILEN chars. This index is at $IDX_CHARS chars of ~$INDEX_MAX_CHARS and $IDX_LINES lines, so per-line length is the only lever left on the total — compose the hook under $INDEX_LINE_MAX."
+    fi
 
     # An index hook carrying changing state is the drift no checker can catch.
     # The file and the hook never contradict each other from inside the store —

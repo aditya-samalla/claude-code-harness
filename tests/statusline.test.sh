@@ -17,9 +17,9 @@ printf '%s' "$OUT" | grep -q "Opus 4.8" && pass "shows model" || fail "shows mod
 printf '%s' "$OUT" | grep -q "42%" && pass "shows percent" || fail "shows percent" "$OUT"
 
 echo "=== Repo name from workspace.repo.name (worktree-safe, full name) ==="
-OUT=$(run '{"workspace":{"repo":{"name":"lacework-security-content"},"project_dir":"/x/.claude/worktrees/spark_udf_migration"},"model":{"display_name":"Opus"},"context_window":{"used_percentage":3}}')
-printf '%s' "$OUT" | grep -q "lacework-security-content" && pass "uses repo.name, not worktree dir" || fail "uses repo.name, not worktree dir" "$OUT"
-printf '%s' "$OUT" | grep -q "spark_udf_migration" && fail "worktree dir not shown as repo" "$OUT" || pass "worktree dir not shown as repo"
+OUT=$(run '{"workspace":{"repo":{"name":"acme-security-content"},"project_dir":"/x/.claude/worktrees/some_feature_branch"},"model":{"display_name":"Opus"},"context_window":{"used_percentage":3}}')
+printf '%s' "$OUT" | grep -q "acme-security-content" && pass "uses repo.name, not worktree dir" || fail "uses repo.name, not worktree dir" "$OUT"
+printf '%s' "$OUT" | grep -q "some_feature_branch" && fail "worktree dir not shown as repo" "$OUT" || pass "worktree dir not shown as repo"
 OUT=$(run '{"workspace":{"project_dir":"/tmp/myproj"},"model":{"display_name":"Opus"},"context_window":{"used_percentage":3}}')
 printf '%s' "$OUT" | grep -q "myproj" && pass "falls back to dir basename without remote" || fail "falls back to dir basename" "$OUT"
 

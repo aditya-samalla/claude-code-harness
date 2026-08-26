@@ -52,7 +52,9 @@ done
 
 # Section markers. memory-lint.sh reads these to tell which section a line is
 # in, so the two must agree; keep the leading text stable.
-M_ACTIVE='<!-- ACTIVE WORK — kept at top so index truncation cannot drop it -->'
+# The ACTIVE marker is only ever READ, never written: that block is hand-curated
+# and this script passes it through, so a store without one does not get one.
+M_ACTIVE_PREFIX='<!-- ACTIVE WORK'
 M_FEEDBACK='<!-- FEEDBACK — how to work; these only function when loaded, so never in the tail -->'
 M_REFERENCE='<!-- REFERENCE — durable facts; the index line is how the model learns they exist -->'
 M_PROJECT='<!-- PROJECT — lifecycle-bound, newest first; the oldest tail is archive-eligible -->'
@@ -77,7 +79,7 @@ for dir in "$PROJECTS"/*/memory; do
   : > "$TMP/active"
   first=$(head -1 "$idx")
   case "$first" in
-    '<!-- ACTIVE WORK'*)
+    "$M_ACTIVE_PREFIX"*)
       # `exit` still runs END in awk, so guard it with a flag or this prints twice.
       end=$(awk 'NR>1 && !/^- \[/ { print NR-1; f=1; exit } END { if (!f) print NR }' "$idx")
       head -n "$end" "$idx" > "$TMP/active"

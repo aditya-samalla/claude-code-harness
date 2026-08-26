@@ -176,7 +176,7 @@ ACTIVE → `feedback` → `reference` → `project` costs nothing, changes no co
 and makes whatever falls off the cheapest thing available:
 
 ```bash
-bash ~/repos/claude-code-harness/bin/memory-index.sh --store <slug> --write
+bash ~/.claude/memory-index.sh --store <slug> --write
 ```
 
 Run it whenever entries have been appended. The memory writer adds index lines

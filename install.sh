@@ -46,9 +46,15 @@ echo "  ✓ statusline.sh"
 # ---- Memory tools -----------------------------------------------------
 # Not a hook: checking memories against GitHub costs a network call, which has
 # no business running on every session start. Invoked on demand instead.
-cp "$REPO/bin/memory-verify.sh" ~/.claude/memory-verify.sh
-chmod +x ~/.claude/memory-verify.sh
-echo "  ✓ memory-verify.sh"
+# All three, together: memory-audit invokes them as a set, and installing only
+# some of them is what left the skill resolving one script from ~/.claude and
+# another from a hardcoded checkout path — so the ~/.claude copy went stale by a
+# day without anything noticing.
+for t in memory-verify memory-fix memory-index; do
+  cp "$REPO/bin/$t.sh" ~/.claude/"$t.sh"
+  chmod +x ~/.claude/"$t.sh"
+  echo "  ✓ $t.sh"
+done
 
 for skill in "$REPO"/skills/*/; do
   [[ -d "$skill" ]] || continue

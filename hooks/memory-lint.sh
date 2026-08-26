@@ -159,6 +159,12 @@ if [ -f "$DIR/MEMORY.md" ]; then
       /^<!--/ { m = $0 }
       $0 == want { print m; exit }
     ' "$DIR/MEMORY.md")
+    # An untyped memory is placed under REFERENCE by memory-index, by design, so
+    # that a merely malformed memory is not demoted into the truncated tail.
+    # Flagging that placement too would have this tool contradict its sibling
+    # and report one defect twice - the missing `type:` is already reported
+    # above, and the placement is a consequence of it, not a separate problem.
+    [ -z "$TYPE" ] && SECTION=""
     case "$SECTION" in
       *"ACTIVE WORK"*|"") ;;                       # hand-curated, or unsorted index
       *FEEDBACK*)  [ "$TYPE" = "feedback" ] || [ "$TYPE" = "user" ] \

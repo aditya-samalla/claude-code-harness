@@ -204,6 +204,19 @@ check_absent "right section is silent" "sits in the" "$(lint "$STORE/refmem.md")
 mk_index FEEDBACK refmem.md
 check_contains "feedback section flagged too" "sits in the FEEDBACK section" "$(lint "$STORE/refmem.md")"
 
+echo "=== an untyped memory is not reported twice for the same defect ==="
+# memory-index files untyped entries under REFERENCE on purpose, so a merely
+# malformed memory is not demoted into the truncated tail. Flagging the
+# placement as well would have the two tools contradict each other.
+printf -- '---\nname: untyped\ndescription: d\nmetadata:\n  modified: 2026-01-01\n---\nbody\n' > "$STORE/untyped.md"
+{ echo "<!-- REFERENCE — durable facts; the index line is how the model learns they exist -->"
+  echo "- [T](untyped.md) — hook"; } > "$STORE/MEMORY.md"
+OUT=$(lint "$STORE/untyped.md")
+check_contains "the missing type is reported" "no \`metadata.type\`" "$OUT"
+check_absent   "the placement is not"         "sits in the"          "$OUT"
+
+echo ""
+
 echo ""
 echo "=== the hand-curated ACTIVE block accepts any type ==="
 { echo "<!-- ACTIVE WORK — kept at top so index truncation cannot drop it -->"

@@ -93,7 +93,12 @@ for dir in "$PROJECTS"/*/memory; do
   while IFS= read -r line; do
     f=$(printf '%s\n' "$line" | sed -n 's/.*](\([^)]*\)).*/\1/p')
     t=""
-    [ -n "$f" ] && [ -f "$dir/$f" ] && t=$(sed -n 's/^  type: *\([a-z]*\) *$/\1/p' "$dir/$f" | head -1)
+    # Permissive on indentation on purpose: older memories carry `type:` at the
+    # top level rather than nested under `metadata:`. A stricter pattern saw no
+    # type on 13 of them, filed them all under REFERENCE, and memory-lint - which
+    # reads the same field permissively - then reported every one as misfiled.
+    # Two tools must not disagree about what a memory IS.
+    [ -n "$f" ] && [ -f "$dir/$f" ] && t=$(sed -n 's/^[[:space:]]*type:[[:space:]]*\([a-z]*\)[[:space:]]*$/\1/p' "$dir/$f" | head -1)
     case "$t" in
       feedback|user) printf '%s\n' "$line" >> "$TMP/feedback" ;;
       reference)     printf '%s\n' "$line" >> "$TMP/reference" ;;

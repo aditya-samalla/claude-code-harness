@@ -383,7 +383,7 @@ scan_store() {
       # section that is not loaded. Reversible in one line, which is why it may
       # be suggested at all where the withdrawn retirement heuristic could not:
       # that one guessed from prose, this one reads resolved evidence.
-      mtype=$(sed -n 's/^  type: *\([a-z]*\) *$/\1/p' "$f" | head -1)
+      mtype=$(sed -n 's/^[[:space:]]*type:[[:space:]]*\([a-z]*\)[[:space:]]*$/\1/p' "$f" | head -1)
       # Behind --curate, with the other index-size advice: a healthy store
       # should stay quiet on a default run, and a settled memory is not a
       # defect. It is only interesting when the index is being trimmed.

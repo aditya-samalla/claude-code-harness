@@ -88,6 +88,18 @@ check_eq "same set of entry lines, byte for byte" "$BEFORE" "$AFTER"
 check_eq "none lost" "30" "$(grep -c '^- \[' "$STORE/MEMORY.md")"
 
 echo ""
+echo "=== an older memory with a top-level type: is still sorted by it ==="
+# These exist: `type:` at the top level rather than under `metadata:`. A stricter
+# pattern filed 13 of them under REFERENCE while memory-lint, reading the same
+# field permissively, called every one misfiled.
+reset
+mem r1 reference
+printf -- '---\nname: oldstyle\ndescription: d\ntype: feedback\n---\nbody\n' > "$STORE/oldstyle.md"
+{ entry r1; entry oldstyle; } > "$STORE/MEMORY.md"
+run --write >/dev/null
+check_eq "the top-level type wins its section" "oldstyle r1 " "$(order)"
+
+echo ""
 echo "=== an entry whose memory is missing or untyped is kept, above project ==="
 reset
 mem r1 reference; mem p1 project

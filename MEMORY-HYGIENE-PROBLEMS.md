@@ -1,7 +1,7 @@
 # Memory system — measured problems, 2026-08-25
 
 Evidence base for the remediation work. Every number here was measured, not
-estimated. Main store is `~/.claude/projects/-Users-adityasamalla-repos/memory`
+estimated. Main store is `~/.claude/projects/<slug>/memory`
 (218 memories); there are 8 stores totalling 289 memories.
 
 ## Problems
@@ -27,7 +27,7 @@ estimated. Main store is `~/.claude/projects/-Users-adityasamalla-repos/memory`
 
 6. **Index hooks drift from the memories they summarise.** Two confirmed, both
    with the SUMMARY lagging the BODY:
-   - index line `3 PRs open (#1938 #1608 #29)` while the linked memory said
+   - an index hook naming three open PRs while the linked memory said
      "all MERGED 2026-08-25" — and that hook sits in the ACTIVE-WORK block, the
      most-read line in the file.
    - a memory `description` saying a PR was "still open and unreviewed" while
@@ -59,7 +59,7 @@ so **compaction cannot reclaim index lines**.
   durable FACTS containing no lesson words. No wordlist separates a pure status
   record from a durable fact.
 - **"Merge memories that are about the same ticket."** Grouped a 21-hour
-  production crash-loop with a PR-landing table because both cited INS-581.
+  production crash-loop with a PR-landing table because both cited one ticket.
   Verbatim-claim overlap was 4 for the one real pair and 0 for all three
   others — content overlap separates them, ticket key does not.
 
@@ -74,16 +74,16 @@ failing because a single memory mixes disposable status with durable fact.
 
 ## Fixes already applied
 
-- 4 memories corrected against live GitHub/Jira (INS-449, INS-431, INS-430/423,
-  ANEP-5121 blocker cleared); 14 now carry `verify:` blocks; 23 claims verify
-  mechanically.
+- 4 memories corrected against live GitHub/Jira (a merged ticket still shown
+  open, a narrowed lookback, a pair of parity follow-ups, and a cleared
+  blocker); 14 now carry `verify:` blocks; 23 claims verify mechanically.
 - Index hook `3 PRs open` → `ALL MERGED 08-25`.
-- `models-ci-optimization-ins499` description and `INS-552 = IN PROGRESS` line
-  corrected — both tickets Done (INS-499 08-24, INS-552 08-25).
-- `project_psp4340_...` now records Hongxuan's 2026-08-21 confirmation that the
-  payload carries `INSTANCE_ID` and the fault is a deployment issue; the
+- A CI-optimization memory's description and an `IN PROGRESS` line corrected —
+  both tickets were Done.
+- A tagging-Lambda memory now records the requester's confirmation that the
+  payload does carry the expected field and the fault is deployment-side; the
   unanswered long-term-ownership question is flagged as the only thing left.
-- 5 verbatim-duplicated lessons stripped from the INS-430/431 summary.
+- 5 verbatim-duplicated lessons stripped from a parity-follow-ups summary.
 
 ---
 

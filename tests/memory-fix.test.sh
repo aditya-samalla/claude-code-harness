@@ -133,14 +133,35 @@ touch -t 202301150000 "$STORE/old.md"     # git checkout/add can restat
 run --apply >/dev/null
 check_eq "stamped with the file's own mtime" "2023-01-15" \
          "$(sed -n 's/^  modified: //p' "$STORE/old.md")"
-check_contains "provenance recorded" "modified_source: mtime" "$(cat "$STORE/old.md")"
+check_contains "provenance says mtime" "modified_source: mtime" "$(cat "$STORE/old.md")"
 check_absent   "not stamped today"   "$(date +%Y-%m-%d)"      "$(sed -n 's/^  modified: //p' "$STORE/old.md")"
 check_eq "second run is a no-op" "0" "$(run_rc --apply --force)"
 
 echo ""
-echo "=== a memory whose mtime is today gets NO stamp, rather than a fabricated one ==="
+echo "=== when the mtime has been reset, the memory's own dates are used ==="
+# A memory cannot predate the events it records, so the latest date written
+# inside it is a real lower bound - unlike an mtime any tool can reset.
 reset_store
-mem_nostamp fresh.md "body"          # created just now, so mtime is today
+mem_nostamp dated.md "The rollout finished on 2026-03-04." "Follow-up landed 2026-05-19."
+OUT=$(run)
+check_contains "counted as fixable"   "modified backfilled 1" "$OUT"
+git_store; run --apply --force >/dev/null
+check_eq "stamped with the LATEST date in the body" "2026-05-19" \
+         "$(sed -n 's/^  modified: //p' "$STORE/dated.md")"
+check_contains "provenance says content" "modified_source: content" "$(cat "$STORE/dated.md")"
+
+echo ""
+echo "=== a date in the future never becomes the stamp ==="
+reset_store
+mem_nostamp planned.md "Shipped 2026-02-02. Cutover is scheduled for 2099-12-31."
+git_store; run --apply --force >/dev/null
+check_eq "capped at today, so the past date wins" "2026-02-02" \
+         "$(sed -n 's/^  modified: //p' "$STORE/planned.md")"
+
+echo ""
+echo "=== with no date anywhere, it stays unstamped rather than fabricated ==="
+reset_store
+mem_nostamp fresh.md "body with no dates at all"   # created now, so mtime is today
 OUT=$(run)
 check_contains "reported as undatable" "no usable date"          "$OUT"
 check_absent   "not counted as a fix"  "modified backfilled 1"   "$OUT"
@@ -162,21 +183,27 @@ check_eq "stamp is the ORIGINAL mtime"   "2023-01-15" "$(sed -n 's/^  modified: 
 
 # ---------------------------------------------------------------------------
 echo ""
-echo "=== malformed frontmatter is its own finding, not lumped in with links ==="
+echo "=== a memory with no name: is malformed, and says so on its own ==="
 reset_store
-printf -- '---\nname: noblock\ndescription: d\n---\nbody\n' > "$STORE/noblock.md"
 printf -- '---\ndescription: d\nmetadata:\n  type: reference\n---\nbody\n' > "$STORE/noname.md"
 OUT=$(run)
-check_contains "missing metadata block reported" "no metadata: block" "$OUT"
-check_contains "missing name reported"           "no name: in frontmatter" "$OUT"
-check_contains "counted as malformed"            "2 memories have malformed frontmatter" "$OUT"
-check_absent   "not counted as ambiguous links"  "ambiguous 2" "$OUT"
+check_contains "missing name reported"          "no name: in frontmatter" "$OUT"
+check_contains "counted as malformed"           "1 memories have malformed frontmatter" "$OUT"
+check_absent   "not counted as ambiguous links" "ambiguous 1" "$OUT"
 
 echo ""
-echo "=== a missing metadata block is still reported when the mtime guard fires ==="
-# Both conditions hold at once here: no metadata block AND an mtime of today.
-# Checking the mtime first would swallow the malformed finding entirely.
-check_contains "not masked by the today-mtime guard" "no metadata: block" "$(run)"
+echo "=== older flat frontmatter is stamped in place, not restructured ==="
+# These exist: `type:` at the top level with no `metadata:` block. Rewriting
+# their shape would be a bigger change than the one repair being made, so the
+# stamp matches the style already there.
+reset_store
+printf -- '---\nname: flat\ndescription: d\ntype: reference\n---\nShipped 2026-03-09.\n' > "$STORE/flat.md"
+git_store; run --apply --force >/dev/null
+check_eq "stamped from the body date" "2026-03-09" \
+         "$(sed -n 's/^modified: //p' "$STORE/flat.md")"
+check_contains "at the top level, matching the file" "$(printf 'type: reference\nmodified: 2026-03-09')" "$(cat "$STORE/flat.md")"
+check_absent   "no metadata: block invented"         "metadata:" "$(cat "$STORE/flat.md")"
+check_eq       "second run is a no-op" "0" "$(run_rc --apply --force)"
 
 # ---------------------------------------------------------------------------
 echo ""

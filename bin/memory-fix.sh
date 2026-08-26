@@ -21,8 +21,12 @@
 #      when exactly one file matches ignoring separators. Zero matches or more
 #      than one -> reported, never guessed.
 #
-#   3. metadata.modified backfilled from file mtime, tagged `modified_source: mtime`
-#      so a later substantive edit can upgrade it.
+#   3. metadata.modified backfilled, tagged with where the date came from so a
+#      later substantive edit can upgrade it. File mtime first; when that has
+#      been reset to today by tooling it carries no information, so the fallback
+#      is the latest date written INSIDE the memory - a memory cannot predate
+#      the events it records. Capped at today. If neither exists, it is left
+#      unstamped and reported: no date at all beats a fabricated one.
 #
 # `modified` means "last substantive edit", so this script must never advance it.
 # Every mtime is snapshotted BEFORE any file is touched and the backfill uses the
@@ -68,6 +72,7 @@ trap 'rm -rf "$TMP"' EXIT
 TOTAL_FIXES=0
 TOTAL_UNRESOLVED=0
 TODAY=$(date +%Y-%m-%d)
+SOURCE=mtime
 
 # ---------------------------------------------------------------------------
 # Rewrite the first top-level `name:` inside the frontmatter block only.
@@ -87,17 +92,32 @@ rewrite_name() {  # rewrite_name <file> <new-stem>
 # Insert `modified:` into the metadata block, after `type:` when present so the
 # key order stays consistent with hand-written memories.
 # ---------------------------------------------------------------------------
-insert_modified() {  # insert_modified <file> <YYYY-MM-DD>
-  awk -v stamp="$2" '
+# Older memories keep `type:` at the top level of the frontmatter with no
+# `metadata:` block at all. Restructuring them would be a bigger, riskier change
+# than the one repair being made, so the stamp simply matches whichever style
+# the file already uses. Both readers are indentation-permissive.
+insert_modified() {  # insert_modified <file> <YYYY-MM-DD> <source>
+  if ! grep -q '^metadata:' "$1"; then
+    awk -v stamp="$2" -v src="$3" '
+      NR == 1 && $0 == "---" { infm = 1; print; next }
+      infm && $0 == "---" {
+        if (!done) { print "modified: " stamp; print "modified_source: " src }
+        infm = 0; print; next
+      }
+      { print }
+    ' "$1" > "$1.tmp" && mv "$1.tmp" "$1"
+    return
+  fi
+  awk -v stamp="$2" -v src="$3" '
     /^metadata:[[:space:]]*$/ { inmeta = 1; print; next }
     inmeta && /^[[:space:]]+type:/ {
       print
       print "  modified: " stamp
-      print "  modified_source: mtime"
+      print "  modified_source: " src
       inmeta = 0; done = 1; next
     }
     inmeta && !/^[[:space:]]/ {            # metadata block ended with no type:
-      if (!done) { print "  modified: " stamp; print "  modified_source: mtime"; done = 1 }
+      if (!done) { print "  modified: " stamp; print "  modified_source: " src; done = 1 }
       inmeta = 0
     }
     { print }
@@ -199,10 +219,6 @@ for dir in "$PROJECTS"/*/memory; do
     b=$(basename "$f"); [ "$b" = "MEMORY.md" ] && continue
     [ "$b" = "ARCHIVE.md" ] && continue
     grep -q '^[[:space:]]*modified:' "$f" && continue
-    if ! grep -q '^metadata:' "$f"; then
-      echo "  MALFORMED  $b  (no metadata: block to stamp)" >> "$TMP/report"
-      N_BAD=$((N_BAD+1)); continue
-    fi
     stamp=$(awk -F'\t' -v n="$b" '$1 == n { print $2 }' "$TMP/mtimes")
     [ -z "$stamp" ] && continue
     # An mtime of today carries no information about when the CLAIM last
@@ -211,12 +227,24 @@ for dir in "$PROJECTS"/*/memory; do
     # Stamping it would fabricate recency and hide the memory from age-gated
     # triage — the one failure mode worse than having no stamp at all.
     if [ "$stamp" = "$TODAY" ]; then
-      N_NODATE=$((N_NODATE+1))
-      echo "  no usable date  $b  (mtime is today; needs a real one)" >> "$TMP/fwd"
-      continue
+      # Fall back to the memory's own content. A memory cannot predate the
+      # events it records, so the latest date written inside it is a real lower
+      # bound on when it was last meaningfully edited - unlike an mtime that
+      # any tool reset. Capped at today, so a memory describing planned work
+      # cannot stamp itself into the future.
+      stamp=$(grep -ohE '20[0-9]{2}-[01][0-9]-[0-3][0-9]' "$f" 2>/dev/null \
+                | sort -u | awk -v t="$TODAY" '$0 <= t' | tail -1)
+      if [ -z "$stamp" ]; then
+        N_NODATE=$((N_NODATE+1))
+        echo "  no usable date  $b  (mtime reset, and no date in the body)" >> "$TMP/fwd"
+        continue
+      fi
+      SOURCE=content
+    else
+      SOURCE=mtime
     fi
     N_STAMP=$((N_STAMP+1))
-    [ "$APPLY" -eq 1 ] && insert_modified "$f" "$stamp"
+    [ "$APPLY" -eq 1 ] && insert_modified "$f" "$stamp" "$SOURCE"
   done
 
   fixes=$((N_NAME + N_LINK + N_STAMP))

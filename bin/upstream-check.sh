@@ -214,6 +214,44 @@ else
 fi
 say ""
 
+# ---- 4c. does the acknowledged non-hook surface still exist? -----------
+# Section 4 can catch an unacknowledged hook EVENT because `claude doctor`
+# enumerates them. Nothing enumerates tools or settings keys, so cross-session
+# messaging — two tools and two settings keys — shipped in 2.1.224 while this
+# check reported "contract holds". This section closes the verification half of
+# that gap: every capability a human wrote into acknowledged_surface is
+# confirmed to still exist, so a rename cannot silently strand a recorded
+# decision. It does NOT close the discovery half, and says so, because a green
+# section that implies coverage it does not have is worse than no section.
+say "4c. acknowledged tools and settings keys still exist upstream"
+if [ ! -e "${CLI_BIN:-}" ] || [ -d "${CLI_BIN:-/}" ]; then
+  say "      (skipped — cannot locate the CLI files)"
+else
+  SURFACE=$(jq -r '(.acknowledged_surface // {})
+                   | (((.tools // {}) | keys[]?), ((.settings_keys // {}) | keys[]?))' \
+            "$CONTRACT" 2>/dev/null | grep -v '^_comment$' || true)
+  if [ -z "$SURFACE" ]; then
+    warn "acknowledged_surface is empty — nothing outside hook events is being tracked."
+  else
+    SURFACE_N=0; SURFACE_GONE=""
+    for cap in $SURFACE; do
+      SURFACE_N=$((SURFACE_N+1))
+      grep -qF "$cap" "$CLI_BIN" 2>/dev/null || SURFACE_GONE="$SURFACE_GONE $cap"
+    done
+    if [ -n "$SURFACE_GONE" ]; then
+      warn "acknowledged but no longer present in the CLI — renamed or removed?$SURFACE_GONE"
+      warn "the recorded decision for each is now stranded; re-read it before trusting it."
+    else
+      ok "all $SURFACE_N acknowledged capabilities still present"
+    fi
+    # Print the denominator. A count a human can compare against the docs is the
+    # difference between "we checked everything" and "we checked these N".
+    say "      verified $SURFACE_N acknowledged capabilit$([ "$SURFACE_N" = 1 ] && echo y || echo ies); this section CANNOT"
+    say "      discover an unacknowledged one — nothing enumerates tools or settings keys."
+  fi
+fi
+say ""
+
 # ---- 5. informational: which live events the harness leaves unused -----
 if [ -n "$LIVE" ]; then
   say "5. valid events the harness does not hook (informational)"

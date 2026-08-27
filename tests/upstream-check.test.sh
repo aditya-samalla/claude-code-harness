@@ -45,8 +45,24 @@ export CLAUDE_DOCTOR_CMD="bash $TMP/stub.sh"
 # scan the real ~150MB binary once per settings key per invocation — slow, and it
 # would make results depend on the machine's Claude install rather than fixtures.
 ALL_KEYS=$(jq -r 'keys[] | select(. != "hooks" and . != "permissions" and . != "env" and . != "sandbox" and . != "statusLine")' config/settings.json)
-: > "$TMP/fullcli"
-for k in $ALL_KEYS; do echo "$k" >> "$TMP/fullcli"; done
+
+# 4c greps the same file for every capability in acknowledged_surface, so a
+# "complete CLI" fixture has to carry those too. Without them every test using
+# this fixture trips 4c, and the failure reads as if it came from the section
+# under test rather than from the fixture.
+ALL_SURFACE=$(jq -r '(.acknowledged_surface // {})
+                     | (((.tools // {}) | keys[]?), ((.settings_keys // {}) | keys[]?))' \
+              config/upstream-contract.json | grep -v '^_comment$')
+
+mkcli(){  # mkcli <path> [capability-to-omit]
+  local out="$1" omit="${2:-}" k
+  : > "$out"
+  for k in $ALL_KEYS $ALL_SURFACE; do
+    [ "$k" = "$omit" ] && continue
+    echo "$k" >> "$out"
+  done
+}
+mkcli "$TMP/fullcli"
 
 run(){ STUB_EVENTS="$1" STUB_MODES="$2" CLAUDE_CLI_BIN="${CLAUDE_CLI_BIN:-$TMP/fullcli}" bash "$CHECK" 2>&1; }
 
@@ -104,11 +120,7 @@ echo "=== ADVISORY: a settings key the CLI no longer mentions (renamed/removed) 
 # one and check it is called out.
 ALL_KEYS=$(jq -r 'keys[] | select(. != "hooks" and . != "permissions" and . != "env" and . != "sandbox" and . != "statusLine")' config/settings.json)
 DROPPED="skipAutoPermissionPrompt"
-: > "$TMP/fakecli"
-for k in $ALL_KEYS; do
-  [ "$k" = "$DROPPED" ] && continue
-  echo "$k" >> "$TMP/fakecli"
-done
+mkcli "$TMP/fakecli" "$DROPPED"
 OUT=$(CLAUDE_CLI_BIN="$TMP/fakecli" run "$ALL_EVENTS" "$ALL_MODES"); ST=$?
 [ "$ST" -eq 2 ] && pass "missing settings key exits 2" || fail "missing settings key exits 2" "exit=$ST"
 printf '%s' "$OUT" | grep -q "no longer mentions these keys.*$DROPPED" \
@@ -118,11 +130,46 @@ printf '%s' "$OUT" | grep -q "not authoritative" \
 
 echo ""
 echo "=== A CLI file that mentions every key is silent ==="
-: > "$TMP/fullcli"
-for k in $ALL_KEYS; do echo "$k" >> "$TMP/fullcli"; done
+mkcli "$TMP/fullcli"
 OUT=$(CLAUDE_CLI_BIN="$TMP/fullcli" run "$ALL_EVENTS" "$ALL_MODES"); ST=$?
 [ "$ST" -eq 0 ] && pass "all keys present exits 0" || fail "all keys present exits 0" "exit=$ST
 $OUT"
+
+echo ""
+echo "=== 4c: the acknowledged non-hook surface ==="
+# The gap this section exists for: cross-session messaging shipped two tools and
+# two settings keys in 2.1.224, and the check said "contract holds" throughout,
+# because hook events were the only population it could enumerate.
+OUT=$(CLAUDE_CLI_BIN="$TMP/fullcli" run "$ALL_EVENTS" "$ALL_MODES")
+printf '%s' "$OUT" | grep -q "4c\. acknowledged tools and settings keys" \
+  && pass "4c runs" || fail "4c runs" "$OUT"
+printf '%s' "$OUT" | grep -qE "all [0-9]+ acknowledged capabilities still present" \
+  && pass "reports all acknowledged capabilities present" || fail "reports all present" "$OUT"
+# The denominator must be printed. A bare tick reads as "we checked everything",
+# which is the exact misreading that let 2.1.224 through.
+printf '%s' "$OUT" | grep -qE "verified [0-9]+ acknowledged capabilit" \
+  && pass "prints the denominator" || fail "prints the denominator" "$OUT"
+printf '%s' "$OUT" | grep -q "CANNOT" \
+  && pass "states it cannot discover unacknowledged capabilities" \
+  || fail "states the discovery limitation" "$OUT"
+
+# A capability upstream dropped must strand loudly, not pass quietly.
+GONE_CAP=$(printf '%s\n' $ALL_SURFACE | head -1)
+mkcli "$TMP/nocap" "$GONE_CAP"
+OUT=$(CLAUDE_CLI_BIN="$TMP/nocap" run "$ALL_EVENTS" "$ALL_MODES"); ST=$?
+[ "$ST" -eq 2 ] && pass "a vanished acknowledged capability exits 2" \
+  || fail "vanished capability exits 2" "exit=$ST"
+printf '%s' "$OUT" | grep -q "$GONE_CAP" \
+  && pass "names the vanished capability" || fail "names the vanished capability" "$OUT"
+printf '%s' "$OUT" | grep -q "stranded" \
+  && pass "says the recorded decision is stranded" || fail "says stranded" "$OUT"
+
+# Every messaging capability must actually be acknowledged — this is the
+# regression guard for the specific miss that motivated the section.
+for cap in SendMessage ListAgents crossSessionInbound isolatePeerMachines; do
+  printf '%s\n' $ALL_SURFACE | grep -qx "$cap" \
+    && pass "contract acknowledges $cap" || fail "contract acknowledges $cap" "absent"
+done
 
 echo ""
 echo "=== An unlocatable CLI file is skipped, not failed ==="

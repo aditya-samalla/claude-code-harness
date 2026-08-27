@@ -153,6 +153,7 @@ bin/                     ← executables the harness installs or you invoke
   statusline.sh
   memory-verify.sh       ← memory staleness check (see Memory staleness)
   upstream-check.sh      ← scheduled drift guard (see Upstream drift)
+  session-route.sh       ← which session owns this PR? (see docs/session-routing.md)
 config/
   settings.json          ← the settings the installer merges in
   merge-settings.jq      ← how that merge is performed
@@ -161,6 +162,8 @@ hooks/                   ← one file per hook, plus shared lib.sh
 skills/                  ← agent skills, one directory each
 tests/                   ← one <name>.test.sh per hook or script
 docs/                    ← research notes
+  session-routing.md     ← routing a PR to the session that owns it; read the
+                           precondition — it only holds in single-author repos
 ```
 
 Paths inside `~/.claude` after install are flat — the grouping above is for

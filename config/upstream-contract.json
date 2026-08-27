@@ -6,11 +6,42 @@
     "acknowledged_hook_events is not 'events we use' — it is 'events a human has",
     "looked at and made a decision about'. When upstream adds one, the check fails",
     "until someone either hooks it or adds it here, which is the acknowledgement.",
-    "That is the mechanism that keeps the harness current instead of quietly stale."
+    "That is the mechanism that keeps the harness current instead of quietly stale.",
+    "",
+    "acknowledged_surface does the same job for capabilities that are NOT hook",
+    "events: tools and settings keys. It exists because hook events were the only",
+    "thing the check could enumerate, so cross-session messaging — two tools and",
+    "two settings keys, shipped in 2.1.224 — landed while the check reported",
+    "'contract holds'. A checker's population is where things hide: anything",
+    "outside it reads as an all-clear.",
+    "",
+    "READ THIS BEFORE TRUSTING A GREEN RUN: acknowledged_surface is verified, not",
+    "discovered. `claude doctor` enumerates hook events, so section 4 can catch an",
+    "event nobody has seen. Nothing enumerates tools or settings keys, so section",
+    "4c can only confirm that what a human already wrote down still exists. A new",
+    "capability no one has noticed will not appear here on its own — that is a",
+    "standing limitation, and the check prints it rather than implying coverage."
   ],
 
-  "last_verified_version": "2.1.228 (Claude Code)",
-  "last_verified_date": "2026-08-12",
+  "last_verified_version": "2.1.248 (Claude Code)",
+  "last_verified_date": "2026-08-27",
+
+  "acknowledged_surface": {
+    "_comment": [
+      "Capability -> the decision a human made about it. Verified by substring",
+      "match against the CLI binary, which is advisory: a build could mangle a",
+      "string, so a miss is a prompt to check by hand, never a hard failure."
+    ],
+    "tools": {
+      "SendMessage": "Acknowledged 2026-08-27, not restricted. Cross-session messaging (2.1.224). Sends plain text to another of your sessions; it cannot approve a permission prompt or change config on the receiving side, so it does not widen this harness's blast radius. Deny it in permissions.deny to turn sending off.",
+      "ListAgents": "Acknowledged 2026-08-27, not restricted. Lists reachable sessions. Read-only, names and status only. Paired with SendMessage in any deny rule, since denying one without the other leaves a half-working surface."
+    },
+    "settings_keys": {
+      "crossSessionInbound": "Acknowledged 2026-08-27, deliberately NOT set. With permissions.defaultMode 'auto' the receiving session counts as prompting, so inbound messages are delivered and a value would change nothing here. Left unset on purpose: an adopter running bypassPermissions gets holds instead, and that is the correct default for them. Revisit if this harness ever ships bypassPermissions.",
+      "isolatePeerMachines": "Acknowledged 2026-08-27, deliberately NOT set. Requires approval before a message leaves the machine. Only meaningful with Remote Control connected, which this harness does not configure. Set it to true if this machine ever joins one.",
+      "dialogExpiry": "Acknowledged 2026-08-27, deliberately NOT set. Governs how long a held inbound message waits for approval (default five minutes). The default is right for interactive use; a long-running `claude -p` worker wanting unattended delivery should set crossSessionInbound rather than stretch this."
+    }
+  },
 
   "acknowledged_hook_events": [
     "ConfigChange",

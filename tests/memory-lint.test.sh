@@ -33,6 +33,9 @@ write_mem() {  # write_mem <stem> <description> <body...>
   local stem="$1" desc="$2"; shift 2
   { echo "---"; echo "name: $stem"; echo "description: $desc"
     echo "metadata:"; echo "  type: reference"; echo "  modified: 2026-01-01"
+    # Provenance is part of a healthy memory: without it nothing can tell a fact
+    # that survived months from one a peer session appended minutes ago.
+    echo "  originSessionId: 11111111-2222-3333-4444-555555555555"
     echo "---"; echo ""; printf '%s\n' "$@"; } > "$STORE/$stem.md"
   grep -q "($stem.md)" "$STORE/MEMORY.md" 2>/dev/null \
     || echo "- [T](
@@ -239,5 +242,6 @@ check_eq "store byte-identical" "$SUM_BEFORE" "$SUM_AFTER"
 check_eq "exit 2 is advice, not a block" "2" "$(lint_rc "$STORE/untouched.md")"
 
 echo ""
-echo "passed $PASS, failed $FAIL"
+echo ""
+echo "--- Results: $PASS passed, $FAIL failed ---"
 [ "$FAIL" -eq 0 ]

@@ -120,5 +120,6 @@ rc=$?
 check_contains "missing dirs report nothing rather than failing" "nothing to report" "$out"
 [ "$rc" = "0" ] && pass "missing dirs exit 0" || fail "missing dirs exit 0" "rc=$rc"
 
-echo "  ${PASS} passed, ${FAIL} failed"
+echo ""
+echo "--- Results: ${PASS} passed, ${FAIL} failed ---"
 [ "$FAIL" -eq 0 ]

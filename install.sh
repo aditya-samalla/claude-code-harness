@@ -50,7 +50,7 @@ echo "  ✓ statusline.sh"
 # some of them is what left the skill resolving one script from ~/.claude and
 # another from a hardcoded checkout path — so the ~/.claude copy went stale by a
 # day without anything noticing.
-for t in memory-verify memory-fix memory-index; do
+for t in memory-verify memory-fix memory-index memory-provenance; do
   cp "$REPO/bin/$t.sh" ~/.claude/"$t.sh"
   chmod +x ~/.claude/"$t.sh"
   echo "  ✓ $t.sh"

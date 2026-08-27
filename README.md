@@ -154,6 +154,9 @@ bin/                     ← executables the harness installs or you invoke
   memory-verify.sh       ← memory staleness check (see Memory staleness)
   upstream-check.sh      ← scheduled drift guard (see Upstream drift)
   session-route.sh       ← which session owns this PR? (see docs/session-routing.md)
+  memory-provenance.sh   ← who wrote this memory, and when? --session NAME answers
+                           "did the session telling me this also write the memory
+                           I am about to cite as agreement?"
 config/
   settings.json          ← the settings the installer merges in
   merge-settings.jq      ← how that merge is performed

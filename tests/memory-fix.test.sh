@@ -238,5 +238,6 @@ AFTER=$(cat "$STORE"/*.md | shasum | awk '{print $1}')
 check_eq "store byte-identical after a dry run" "$BEFORE" "$AFTER"
 
 echo ""
-echo "passed $PASS, failed $FAIL"
+echo ""
+echo "--- Results: $PASS passed, $FAIL failed ---"
 [ "$FAIL" -eq 0 ]

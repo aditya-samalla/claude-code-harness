@@ -130,5 +130,6 @@ echo "=== an unknown store is an error, not a silent success ==="
 check_eq "exit 3" "3" "$(bash "$SCRIPT_UT" --store nosuchstore >/dev/null 2>&1; echo $?)"
 
 echo ""
-echo "passed $PASS, failed $FAIL"
+echo ""
+echo "--- Results: $PASS passed, $FAIL failed ---"
 [ "$FAIL" -eq 0 ]

@@ -78,6 +78,27 @@ esac
 grep -q '^[[:space:]]*modified:' "$FILE" \
   || add "no \`metadata.modified\`. Without it, age falls back to file mtime, which any tool touching the file resets."
 
+# Provenance. A memory records what is believed, never who came to believe it, so
+# an unattributed file is a claim with no origin: a paragraph a peer session
+# appended twenty minutes ago is textually identical to one that has survived
+# months of contact. That is not a staleness problem -- the memory may never have
+# been independently established at all -- and it lets a session cite a memory as
+# corroboration for the very finding that wrote it.
+#
+# Claude Code stamps originSessionId on memories it writes itself; one written
+# straight through the Write tool gets whatever frontmatter the author chose, so
+# this is where that gap closes. The hook knows the writing session, so report the
+# value rather than the absence: naming the field costs an edit and a guess,
+# supplying it costs an edit.
+if ! grep -q 'originSessionId:' "$FILE"; then
+  SID=$(jq_get '.session_id')
+  if [ -n "$SID" ]; then
+    add "no \`metadata.originSessionId\`. Add \`originSessionId: $SID\` so this memory can be attributed later — without it nothing can tell a fact that survived months from one appended minutes ago."
+  else
+    add "no \`metadata.originSessionId\`, and this hook could not read its own session id. Add the writing session's id by hand."
+  fi
+fi
+
 # --- description ----------------------------------------------------------
 # The description becomes the index hook, and the index is the only thing loaded
 # into every session. Volatile state in a hook is the drift that no checker can

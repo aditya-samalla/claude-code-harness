@@ -56,6 +56,15 @@ for t in memory-verify memory-fix memory-index; do
   echo "  ✓ $t.sh"
 done
 
+# ---- Session routing --------------------------------------------------
+# Also not a hook, and for the same reason as the memory tools: it answers a
+# question you ask at a decision point ("which session owns this PR?"), not one
+# worth answering on every session start. Reads only local transcripts and job
+# records, so no network call and nothing to configure.
+cp "$REPO/bin/session-route.sh" ~/.claude/session-route.sh
+chmod +x ~/.claude/session-route.sh
+echo "  ✓ session-route.sh"
+
 for skill in "$REPO"/skills/*/; do
   [[ -d "$skill" ]] || continue
   name=$(basename "$skill")

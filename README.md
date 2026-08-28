@@ -163,6 +163,8 @@ config/
   upstream-contract.json ← the upstream facts the harness relies on
 hooks/                   ← one file per hook, plus shared lib.sh
 skills/                  ← agent skills, one directory each
+  memory-audit/          ← check memories against external truth
+  memory-archive/        ← relieve an over-limit index; proposes, never writes
 tests/                   ← one <name>.test.sh per hook or script
 docs/                    ← research notes
   session-routing.md     ← routing a PR to the session that owns it; read the

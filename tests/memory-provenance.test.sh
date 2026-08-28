@@ -25,12 +25,18 @@ check_absent()   { case "$3" in *"$2"*) fail "$1" "unexpected: $2" ;; *) pass "$
 
 run() { bash "$SCRIPT_UT" "$@" 2>&1; }
 
-# mem <stem> [sid] [modified]
+# mem <stem> [sid] [modified] [origin-source]
+# The 4th argument writes originSessionId_source, marking an origin recovered
+# from transcripts rather than stamped at write time. Written directly rather
+# than patched in afterwards: `sed -i ''` is BSD-only and silently does nothing
+# on GNU sed, so a fixture built that way passes on macOS and fails on Linux CI
+# with the memory reading ANON.
 mem() {
-  local stem="$1" sid="${2:-}" mod="${3:-2026-08-01T00:00:00.000Z}"
+  local stem="$1" sid="${2:-}" mod="${3:-2026-08-01T00:00:00.000Z}" src="${4:-}"
   { echo "---"; echo "name: $stem"; echo "description: d"
     echo "metadata:"; echo "  type: reference"; echo "  modified: $mod"
     [ -n "$sid" ] && echo "  originSessionId: $sid"
+    [ -n "$src" ] && echo "  originSessionId_source: $src"
     echo "---"; echo "body"; } > "$STORE/$stem.md"
 }
 # job <sid> <name>
@@ -93,9 +99,13 @@ check_contains "unfiltered count reports the corpus" "1 of 3 stamped at write ti
 # originSessionId_source. If this reader ignored that field, a recovered origin
 # would render identically to one Claude Code stamped at write time -- turning an
 # inference into a fact silently, which is the failure this tool exists to catch.
-mem derived_one "aaaaaaaa-1111-2222-3333-444444444444" "2026-08-14T00:00:00.000Z"
-/usr/bin/sed -i '' 's|^  originSessionId: aaaaaaaa-1111-2222-3333-444444444444$|&\
-  originSessionId_source: transcript|' "$STORE/derived_one.md"
+mem derived_one "aaaaaaaa-1111-2222-3333-444444444444" "2026-08-14T00:00:00.000Z" transcript
+# Assert the fixture itself, or a helper that silently wrote nothing would make
+# the checks below fail for the wrong reason -- which is exactly how the BSD-only
+# sed edit this replaced passed locally and failed on Linux.
+grep -q '^  originSessionId_source: transcript$' "$STORE/derived_one.md" \
+  && pass "fixture carries the derived label" \
+  || fail "fixture carries the derived label" "helper did not write it"
 out=$(run)
 check_contains "a recovered origin is DERIVED, not BY"  "DERIVED" "$out"
 check_contains "and still resolves to the session name" 'derived_one' "$out"

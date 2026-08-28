@@ -86,7 +86,27 @@ check_absent   "--anon drops attributed memories" "cypher query optimization" "$
 check_contains "--anon count reflects the filter" "1 matched, of 3 memories scanned" "$out"
 
 out=$(run)
-check_contains "unfiltered count reports the corpus" "1 of 3 attributable, 1 anonymous" "$out"
+check_contains "unfiltered count reports the corpus" "1 of 3 stamped at write time, 1 anonymous" "$out"
+
+# --- a recovered origin must not pass as a first-party stamp ----------------
+# memory-fix --provenance recovers origins from transcripts and marks them with
+# originSessionId_source. If this reader ignored that field, a recovered origin
+# would render identically to one Claude Code stamped at write time -- turning an
+# inference into a fact silently, which is the failure this tool exists to catch.
+mem derived_one "aaaaaaaa-1111-2222-3333-444444444444" "2026-08-14T00:00:00.000Z"
+/usr/bin/sed -i '' 's|^  originSessionId: aaaaaaaa-1111-2222-3333-444444444444$|&\
+  originSessionId_source: transcript|' "$STORE/derived_one.md"
+out=$(run)
+check_contains "a recovered origin is DERIVED, not BY"  "DERIVED" "$out"
+check_contains "and still resolves to the session name" 'derived_one' "$out"
+check_contains "the count separates recovered from stamped" "recovered from transcripts" "$out"
+check_contains "and says what a DERIVED origin is worth"    "evidence, not a record" "$out"
+
+out=$(run --json)
+echo "$out" | jq -e 'select(.memory=="derived_one") | select(.derived==true)' >/dev/null 2>&1 \
+  && pass "--json marks it derived" || fail "--json marks it derived" "flag absent"
+echo "$out" | jq -e 'select(.memory=="attributed") | select(.derived==false)' >/dev/null 2>&1 \
+  && pass "--json leaves a first-party stamp underived" || fail "--json first-party underived" "flag wrong"
 
 # --- output modes and edge cases -------------------------------------------
 out=$(run --json)

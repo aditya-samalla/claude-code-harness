@@ -237,6 +237,140 @@ run >/dev/null 2>&1
 AFTER=$(cat "$STORE"/*.md | shasum | awk '{print $1}')
 check_eq "store byte-identical after a dry run" "$BEFORE" "$AFTER"
 
+
+# ===========================================================================
+# --provenance: originSessionId recovered from the transcripts
+# ===========================================================================
+# The evidence lives beside the store: <projects>/<slug>/<sessionId>.jsonl, and
+# the transcript's filename IS the session id. These helpers write one recorded
+# tool call each, in the two shapes a memory actually gets written by.
+
+# Shape 1: the Write tool, which records an absolute file_path.
+tx_write() {  # tx_write <session-uuid> <timestamp> <memory-filename>
+  printf '{"timestamp":"%s","message":{"content":[{"type":"tool_use","name":"Write","input":{"file_path":"%s/%s","content":"x"}}]}}\n' \
+    "$2" "$STORE" "$3" >> "$CLAUDE_MEMORY_PROJECTS_DIR/teststore/$1.jsonl"
+}
+# Shape 2: a Bash heredoc. There is no file_path key anywhere in this line, and
+# the directory is a shell variable — this is the shape that carries almost all
+# of the real corpus, and the shape a file_path query cannot see.
+tx_bash() {  # tx_bash <session-uuid> <timestamp> <memory-filename>
+  printf '{"timestamp":"%s","message":{"content":[{"type":"tool_use","name":"Bash","input":{"command":"M=%s; cat > \\"$M/%s\\" <<EOF\\nbody\\nEOF"}}]}}\n' \
+    "$2" "$STORE" "$3" >> "$CLAUDE_MEMORY_PROJECTS_DIR/teststore/$1.jsonl"
+}
+# A memory carrying an origin already, so tests can prove it is never rewritten.
+mem_origin() {  # mem_origin <filename> <session-uuid>
+  { echo "---"; echo "name: ${1%.md}"; echo "description: fixture"
+    echo "metadata:"; echo "  type: reference"; echo "  originSessionId: $2"
+    echo "---"; echo "body"; } > "$STORE/$1"
+}
+# Clear the transcripts as well as the store: a leftover .jsonl from the
+# previous case is evidence, and would silently attribute the next one.
+reset_prov() {
+  reset_store
+  rm -f "$CLAUDE_MEMORY_PROJECTS_DIR/teststore"/*.jsonl
+}
+
+EARLY=11111111-1111-1111-1111-111111111111
+LATE=22222222-2222-2222-2222-222222222222
+
+echo ""
+echo "=== the earliest write wins, not the most recent one ==="
+# Several sessions write the same memory; the one that created it got there
+# first. Same rule as session-route.sh uses to pick a PR's raiser.
+reset_prov
+mem_nostamp shared.md "body"
+tx_write "$LATE"  2026-05-05T10:00:00.000Z shared.md
+tx_write "$EARLY" 2026-01-01T10:00:00.000Z shared.md
+tx_write "$LATE"  2026-06-06T10:00:00.000Z shared.md
+OUT=$(run --provenance)
+check_contains "counted as recoverable" "origin recovered 1" "$OUT"
+check_contains "names the earliest writer" "11111111" "$OUT"
+git_store; run --provenance --apply >/dev/null
+check_eq "stamped with the earliest writer" "$EARLY" \
+         "$(sed -n 's/^  originSessionId: //p' "$STORE/shared.md")"
+check_absent "the later writer is not the origin" "$LATE" "$(cat "$STORE/shared.md")"
+
+echo ""
+echo "=== the recovered origin is labelled as derived, never passed off as first-party ==="
+reset_prov
+mem_nostamp derived.md "body"
+tx_write "$EARLY" 2026-01-01T10:00:00.000Z derived.md
+git_store; run --provenance --apply >/dev/null
+check_contains "origin written"      "originSessionId: $EARLY"          "$(cat "$STORE/derived.md")"
+check_contains "and marked derived"  "originSessionId_source: transcript" "$(cat "$STORE/derived.md")"
+
+echo ""
+echo "=== an origin already on the file is never overwritten ==="
+# Even when the transcripts name a different, earlier session. A first-party
+# stamp is the writer's own record; this tool does not get to argue with it.
+reset_prov
+mem_origin kept.md "0000-first-party"
+tx_write "$EARLY" 2020-01-01T10:00:00.000Z kept.md
+OUT=$(run --provenance)
+check_contains "counted as already stamped" "already stamped 1" "$OUT"
+check_absent   "not counted as recoverable" "origin recovered 1" "$OUT"
+git_store; run --provenance --apply --force >/dev/null
+check_eq       "left exactly as it was" "0000-first-party" \
+               "$(sed -n 's/^  originSessionId: //p' "$STORE/kept.md")"
+check_absent   "no derived label added" "originSessionId_source" "$(cat "$STORE/kept.md")"
+
+echo ""
+echo "=== a memory no transcript wrote stays ANON, and is counted, not dropped ==="
+# The failure this guards against is a report that lists only its successes:
+# "recovered 90" reads as done, while the memories nothing can attribute stay
+# invisible. They are the ones a reader most needs to know about.
+reset_prov
+mem_nostamp evidenced.md "body"
+mem_nostamp orphan.md   "body"
+tx_write "$EARLY" 2026-01-01T10:00:00.000Z evidenced.md
+OUT=$(run --provenance)
+check_contains "the orphan is named"      "still ANON  orphan"  "$OUT"
+check_contains "and counted"              "still ANON 1"        "$OUT"
+check_contains "the denominator is printed" "scanned 2"         "$OUT"
+check_contains "so is the recovered count"  "origin recovered 1" "$OUT"
+git_store; run --provenance --apply --force >/dev/null
+check_absent "nothing invented for it" "originSessionId" "$(cat "$STORE/orphan.md")"
+
+echo ""
+echo "=== a Bash heredoc write is evidence too — it carries no file_path key ==="
+# Measured on the real corpus: the file_path shape alone recovers 1 memory of
+# 120; adding this shape recovers 90. A query that sees one spelling of a write
+# is not a census of writes.
+reset_prov
+mem_nostamp viabash.md "body"
+tx_bash "$EARLY" 2026-01-01T10:00:00.000Z viabash.md
+OUT=$(run --provenance)
+check_absent   "the fixture really has no file_path key" "file_path" \
+               "$(cat "$CLAUDE_MEMORY_PROJECTS_DIR/teststore/$EARLY.jsonl")"
+check_contains "recovered anyway" "origin recovered 1" "$OUT"
+git_store; run --provenance --apply >/dev/null
+check_eq "stamped from the heredoc" "$EARLY" \
+         "$(sed -n 's/^  originSessionId: //p' "$STORE/viabash.md")"
+
+echo ""
+echo "=== an arrow in prose is not a redirect ==="
+# `-> name.md` in a memory body matches the shape of a shell redirect. Left
+# unhandled it invents a writer for whichever memory a sentence happens to name.
+reset_prov
+mem_nostamp arrowed.md "body"
+printf '{"timestamp":"2026-01-01T10:00:00.000Z","message":{"content":[{"type":"tool_use","name":"Bash","input":{"command":"echo see %s/notes -> $M/arrowed.md"}}]}}\n' \
+  "$STORE" > "$CLAUDE_MEMORY_PROJECTS_DIR/teststore/$EARLY.jsonl"
+OUT=$(run --provenance)
+check_contains "no writer invented" "still ANON 1"       "$OUT"
+check_absent   "nothing recovered"  "origin recovered 1" "$OUT"
+
+echo ""
+echo "=== a --provenance dry run never writes ==="
+reset_prov
+mem_nostamp dry1.md "body"
+mem_nostamp dry2.md "body"
+tx_write "$EARLY" 2026-01-01T10:00:00.000Z dry1.md
+tx_bash  "$EARLY" 2026-01-02T10:00:00.000Z dry2.md
+BEFORE=$(cat "$STORE"/*.md | shasum | awk '{print $1}')
+run --provenance >/dev/null 2>&1
+AFTER=$(cat "$STORE"/*.md | shasum | awk '{print $1}')
+check_eq "store byte-identical after a dry run" "$BEFORE" "$AFTER"
+
 echo ""
 echo ""
 echo "--- Results: $PASS passed, $FAIL failed ---"

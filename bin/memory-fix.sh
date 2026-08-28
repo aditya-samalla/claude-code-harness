@@ -34,10 +34,60 @@
 # would then record today's date for them, destroying the age signal corpus-wide
 # in a single run.
 #
-# Usage:  bash memory-fix.sh [--store SLUG] [--apply] [--force]
+# And one separate repair, run on its own with --provenance:
+#
+#   4. metadata.originSessionId recovered from Claude Code's transcripts.
+#      Without an origin nothing can tell a fact that survived months from one a
+#      peer session appended minutes ago, and a session can cite a memory as
+#      corroboration for the very finding that wrote it. Claude Code stamps the
+#      origin when it writes a memory through its own memory path; a memory
+#      written by other means carries none. The transcripts still hold the
+#      answer, because the write itself was recorded there.
+#
+# Usage:  bash memory-fix.sh [--store SLUG] [--provenance] [--apply] [--force]
 #   --store SLUG  only this store (default: every store under ~/.claude/projects)
+#   --provenance  run repair 4 INSTEAD of repairs 1-3 (see below)
 #   --apply       write the changes (default is a dry run)
 #   --force       allow --apply on a store with uncommitted changes
+#
+# ---- repair 4, and why it looks the way it does ---------------------------
+#
+# The evidence is one grep over every transcript, ~7s for the whole corpus. A
+# per-memory scan is the obvious implementation and takes minutes, which is slow
+# enough that nobody runs it; so the pass is inverted — read every write once,
+# and index it by the memory it touched.
+#
+# TWO write shapes, and the second one is the whole point. The obvious query
+# finds `"file_path"` on a Write/Edit/MultiEdit tool call. Measured on this
+# corpus — 332 memories, 112 of them carrying no origin — that shape recovers
+# exactly ONE of the 112, because a memory Claude Code wrote through its own
+# tool is a memory it had already stamped itself. The unstamped ones were
+# written by the other shape, a Bash heredoc: `cat > "$M/name.md" <<EOF`. It
+# carries no `file_path` key anywhere, so that query cannot see it. Adding it
+# takes the recovery from 1 to 91. An instrument that reads one spelling of a
+# write is not a census of writes, and here the spelling it missed was 99% of
+# the answer.
+#
+# EARLIEST WRITE WINS, which is bin/session-route.sh's rule for pr-link records
+# and is settled there: several sessions write the same memory, and the one that
+# created it is the one that got there first. Ties are not handled because
+# millisecond timestamps do not tie.
+#
+# DERIVED, AND SAID SO. Both `originSessionId` and `originSessionId_source:
+# transcript` are written. A recovered origin is an inference from a side effect
+# a session left behind, not that session's own record of itself, and the two
+# have to stay tellable apart. Measured: of the 220 memories already carrying a
+# first-party stamp this derivation has an opinion about 66, and reproduces the
+# first-party answer on 58 of them (88%). The other 8 are memories whose
+# first-party stamp names a session with no write to that path recorded
+# anywhere — so on those the transcripts and the stamp disagree about who wrote
+# it, and the stamp is the one that wins (see below).
+#
+# NEVER OVERWRITTEN, NEVER INVENTED. A memory that already has an origin is
+# skipped whatever the transcripts say. A memory with no write recorded anywhere
+# stays ANON and is counted in the report rather than dropped from it: a run
+# that reports only its successes is exactly how the 111-memory blind spot above
+# would have stayed invisible behind a confident "recovered 1".
 #
 # --apply refuses to run on a dirty git store, so the repair always lands as a
 # reviewable, revertable commit of its own. Stores are git repos; if one is not,
@@ -52,13 +102,15 @@ PROJECTS="${CLAUDE_MEMORY_PROJECTS_DIR:-$HOME/.claude/projects}"
 ONLY_STORE=""
 APPLY=0
 FORCE=0
+PROVENANCE=0
 
 while [ $# -gt 0 ]; do
   case "$1" in
     --store) ONLY_STORE="${2:-}"; shift 2 ;;
     --apply) APPLY=1; shift ;;
     --force) FORCE=1; shift ;;
-    -h|--help) sed -n '2,40p' "$0"; exit 0 ;;
+    --provenance) PROVENANCE=1; shift ;;
+    -h|--help) sed -n '2,90p' "$0"; exit 0 ;;
     *) echo "unknown argument: $1" >&2; exit 3 ;;
   esac
 done
@@ -73,6 +125,7 @@ TOTAL_FIXES=0
 TOTAL_UNRESOLVED=0
 TODAY=$(date +%Y-%m-%d)
 SOURCE=mtime
+TOTAL_SCAN=0; TOTAL_HAVE=0; TOTAL_GOT=0; TOTAL_ANON=0; TOTAL_INDEX=0; STALE=0
 
 # ---------------------------------------------------------------------------
 # Rewrite the first top-level `name:` inside the frontmatter block only.
@@ -125,6 +178,139 @@ insert_modified() {  # insert_modified <file> <YYYY-MM-DD> <source>
   ' "$1" > "$1.tmp" && mv "$1.tmp" "$1"
 }
 
+# ---------------------------------------------------------------------------
+# Insert `originSessionId:` + `originSessionId_source:` — same placement rules as
+# insert_modified, for the same reason: match the shape the file already uses
+# rather than restructuring it.
+# ---------------------------------------------------------------------------
+# The `_source` key is not decoration. A first-party stamp is the writer's own
+# record of itself; this one is inferred from a side effect it left in a
+# transcript, and a reader weighing whether a memory independently corroborates
+# something needs to be able to tell which kind they are holding.
+insert_origin() {  # insert_origin <file> <session-uuid>
+  if ! grep -q '^metadata:' "$1"; then
+    awk -v sid="$2" '
+      NR == 1 && $0 == "---" { infm = 1; print; next }
+      infm && $0 == "---" {
+        if (!done) { print "originSessionId: " sid; print "originSessionId_source: transcript" }
+        infm = 0; print; next
+      }
+      { print }
+    ' "$1" > "$1.tmp" && mv "$1.tmp" "$1"
+    return
+  fi
+  awk -v sid="$2" '
+    /^metadata:[[:space:]]*$/ { inmeta = 1; print; next }
+    inmeta && /^[[:space:]]+type:/ {
+      print
+      print "  originSessionId: " sid
+      print "  originSessionId_source: transcript"
+      inmeta = 0; done = 1; next
+    }
+    inmeta && !/^[[:space:]]/ {            # metadata block ended with no type:
+      if (!done) { print "  originSessionId: " sid; print "  originSessionId_source: transcript"; done = 1 }
+      inmeta = 0
+    }
+    { print }
+    END { }
+  ' "$1" > "$1.tmp" && mv "$1.tmp" "$1"
+}
+
+# ---------------------------------------------------------------------------
+# Build memory-path -> earliest writing session, once, for every store.
+# ---------------------------------------------------------------------------
+# Two greps rather than one: the first narrows hundreds of megabytes of
+# transcript to the lines mentioning a memory path, the second keeps only the
+# tool calls. Doing it in that order is what keeps the whole corpus at ~7s.
+build_evidence() {
+  find "$PROJECTS" -path '*/memory/*.md' -type f 2>/dev/null \
+    | awk -F/ '{ print $NF "\t" $0 }' > "$TMP/corpus"
+
+  : > "$TMP/hits"
+  find "$PROJECTS" -name '*.jsonl' -type f -print0 2>/dev/null \
+    | xargs -0 grep -H '/memory' 2>/dev/null \
+    | grep -E '"name":"(Write|Edit|MultiEdit|Bash)"' > "$TMP/hits" 2>/dev/null || true
+
+  # The transcript filename IS the sessionId, so the -H prefix carries the
+  # author and the line body carries the timestamp and the target.
+  awk -v corpusfile="$TMP/corpus" '
+    BEGIN { FS = "\t" }
+
+    FILENAME == corpusfile {
+      if ($1 == "MEMORY.md" || $1 == "ARCHIVE.md" || $1 == "MEMORY_ARCHIVE.md") next
+      live[$2] = 1; nbase[$1]++; bpath[$1] = $2
+      next
+    }
+
+    {
+      i = index($0, ":{"); if (i == 0) next
+      sid = substr($0, 1, i - 1); sub(/.*\//, "", sid); sub(/\.jsonl$/, "", sid)
+      rest = substr($0, i + 1)
+      ts = ""
+      if (match(rest, /"timestamp":"[^"]*"/)) ts = substr(rest, RSTART + 13, RLENGTH - 14)
+      if (ts == "") next
+
+      # shape 1 — Write/Edit/MultiEdit record an absolute file_path.
+      if (rest ~ /"name":"(Write|Edit|MultiEdit)"/) {
+        s = rest
+        while (match(s, /"file_path":"[^"]*\/memory\/[^"]*"/)) {
+          claim(substr(s, RSTART + 13, RLENGTH - 14), ts, sid)
+          s = substr(s, RSTART + RLENGTH)
+        }
+      }
+
+      # shape 2 — a Bash redirect. There is no file_path key; the target is
+      # usually built from a shell variable, so only the basename survives.
+      if (rest ~ /"name":"Bash"/) {
+        c = rest
+        gsub(/\\"/, " ", c); gsub(/"/, " ", c); gsub(/\\n/, " ", c)
+        # `->` in prose is not a redirect. Left in, it invents a writer for any
+        # memory whose name follows an arrow in another memory body.
+        gsub(/-+>/, " ", c); gsub(/=>/, " ", c)
+        gsub(/>/, " > ", c)
+        n = split(c, tok, /[ \t]+/)
+        for (k = 1; k < n; k++) {
+          if (tok[k] != ">" && tok[k] != "tee") continue
+          j = k + 1
+          while (j <= n && (tok[j] == ">" || tok[j] == "-a")) j++
+          if (j <= n && tok[j] ~ /\/[^\/]*\.md$/) claim(tok[j], ts, sid)
+        }
+      }
+    }
+
+    function claim(target, ts, sid,   base, path) {
+      base = target; sub(/.*\//, "", base)
+      if (base == "MEMORY.md" || base == "ARCHIVE.md" || base == "MEMORY_ARCHIVE.md") return
+      if (substr(target, 1, 1) == "/") {
+        # An absolute path is exact evidence. One that no longer exists is a
+        # memory this corpus has since moved or deleted: counted, never remapped
+        # onto a same-named file, which would attribute one memory to the writer
+        # of another.
+        if (!(target in live)) { stale[target] = 1; return }
+        path = target
+      } else {
+        # `$M/name.md` — the variable is unresolvable from here, so fall back to
+        # the basename, and only when exactly one memory can be meant. Zero or
+        # more than one: dropped, never guessed. Same rule as the wiki-links.
+        if (nbase[base] != 1) return
+        path = bpath[base]
+      }
+      if (!(path in first) || ts < first[path]) { first[path] = ts; who[path] = sid }
+    }
+
+    END {
+      for (p in first) printf "%s\t%s\t%s\n", p, who[p], first[p]
+      n = 0; for (t in stale) n++
+      printf "#stale\t%d\n", n
+    }
+  ' "$TMP/corpus" "$TMP/hits" > "$TMP/origins.raw"
+
+  STALE=$(sed -n 's/^#stale	//p' "$TMP/origins.raw")
+  grep -v '^#stale	' "$TMP/origins.raw" > "$TMP/origins" || true
+}
+
+[ "$PROVENANCE" -eq 1 ] && build_evidence
+
 for dir in "$PROJECTS"/*/memory; do
   [ -d "$dir" ] || continue
   slug=$(basename "$(dirname "$dir")")
@@ -143,6 +329,44 @@ for dir in "$PROJECTS"/*/memory; do
       echo "REFUSING $slug: uncommitted changes present; commit them first (or --force)." >&2
       exit 3
     fi
+  fi
+
+  # --- repair 4: originSessionId, from the transcript evidence ---------------
+  if [ "$PROVENANCE" -eq 1 ]; then
+    N_SCAN=0; N_HAVE=0; N_GOT=0; N_ANON=0; N_INDEX=0
+    : > "$TMP/report"
+    for f in "$dir"/*.md; do
+      b=$(basename "$f")
+      # The index files are appended by every session that ever added a line to
+      # them, so "the session that wrote this" is not a question they answer.
+      case "$b" in
+        MEMORY.md|ARCHIVE.md|MEMORY_ARCHIVE.md) N_INDEX=$((N_INDEX+1)); continue ;;
+      esac
+      N_SCAN=$((N_SCAN+1))
+      if sed -n '1,25p' "$f" | grep -q '^[[:space:]]*originSessionId:'; then
+        N_HAVE=$((N_HAVE+1)); continue
+      fi
+      sid=$(awk -F'\t' -v p="$f" '$1 == p { print $2; exit }' "$TMP/origins")
+      if [ -z "$sid" ]; then
+        N_ANON=$((N_ANON+1))
+        [ "$N_ANON" -le 8 ] && echo "  still ANON  ${b%.md}  (no transcript records writing it)" >> "$TMP/report"
+        continue
+      fi
+      N_GOT=$((N_GOT+1))
+      [ "$N_GOT" -le 8 ] && echo "  origin  ${b%.md}  <- ${sid%%-*}" >> "$TMP/report"
+      [ "$APPLY" -eq 1 ] && insert_origin "$f" "$sid"
+    done
+
+    TOTAL_SCAN=$((TOTAL_SCAN + N_SCAN)); TOTAL_HAVE=$((TOTAL_HAVE + N_HAVE))
+    TOTAL_GOT=$((TOTAL_GOT + N_GOT));   TOTAL_ANON=$((TOTAL_ANON + N_ANON))
+    TOTAL_INDEX=$((TOTAL_INDEX + N_INDEX)); TOTAL_FIXES=$((TOTAL_FIXES + N_GOT))
+
+    echo "$slug"
+    printf '  scanned %s   already stamped %s   origin recovered %s   still ANON %s\n' \
+      "$N_SCAN" "$N_HAVE" "$N_GOT" "$N_ANON"
+    [ "$N_INDEX" -gt 0 ] && printf '  (%s index files excluded: no single session writes them)\n' "$N_INDEX"
+    [ -s "$TMP/report" ] && head -16 "$TMP/report"
+    continue
   fi
 
   # --- pass 0: snapshot mtimes BEFORE anything is edited ---------------------
@@ -263,6 +487,30 @@ for dir in "$PROJECTS"/*/memory; do
 done
 
 echo ""
+if [ "$PROVENANCE" -eq 1 ]; then
+  # The denominator prints unconditionally, including on a run that recovers
+  # nothing. "origin recovered 91" on its own reads as a finished job; only
+  # "91 recovered, 21 still ANON, out of 332 scanned" says how much is still
+  # unanswered — and the ANON count is the number that decides whether to
+  # trust the store's provenance.
+  printf 'scanned %s   already stamped %s   origin recovered %s   still ANON %s\n' \
+    "$TOTAL_SCAN" "$TOTAL_HAVE" "$TOTAL_GOT" "$TOTAL_ANON"
+  [ "$TOTAL_INDEX" -gt 0 ] && printf '%s index files excluded from the scan.\n' "$TOTAL_INDEX"
+  [ "${STALE:-0}" -gt 0 ] && printf '%s memory paths were written in the transcripts but no longer exist here (moved or deleted stores) — evidence dropped, never remapped onto a same-named file.\n' "$STALE"
+  if [ "$TOTAL_ANON" -gt 0 ]; then
+    printf 'The %s ANON have no write recorded anywhere; nothing here can attribute them.\n' "$TOTAL_ANON"
+  fi
+  if [ "$TOTAL_GOT" -eq 0 ]; then
+    echo "nothing to recover"
+    exit 0
+  fi
+  if [ "$APPLY" -eq 1 ]; then
+    echo "stamped $TOTAL_GOT origins, each tagged originSessionId_source: transcript"
+  else
+    echo "$TOTAL_GOT origins recoverable — rerun with --apply"
+  fi
+  exit 1
+fi
 if [ "$TOTAL_FIXES" -eq 0 ] && [ "$TOTAL_UNRESOLVED" -eq 0 ]; then
   echo "clean: nothing to fix"
   exit 0

@@ -43,6 +43,15 @@
 #               id, so two memories sharing it still share an author.
 #   ANON        no originSessionId. Cannot be attributed, and cannot be excluded
 #               as a source. Treat as unverified provenance, not as neutral.
+#   DERIVED     attributed, but the origin was RECOVERED from transcripts by
+#               memory-fix --provenance rather than stamped at write time. It is
+#               evidence, not a record: good enough to exclude a session as an
+#               independent source, not good enough to assert one. DERIVED? is
+#               the same, with no job record to resolve the name.
+#
+# The distinction is the point. A recovered origin that rendered as BY would turn
+# an inference into a fact silently, which is the failure this tool was built to
+# prevent, reproduced inside the tool itself.
 set -u
 
 PROJECTS_DIR="${CLAUDE_MEMORY_PROJECTS_DIR:-$HOME/.claude/projects}"
@@ -91,9 +100,9 @@ find "$PROJECTS_DIR" -path '*/memory/*.md' -type f -print0 2>/dev/null \
         slug = parts[n-2]
         if (mem != "MEMORY" && mem != "MEMORY_ARCHIVE" && mem != "ARCHIVE" \
             && (want == "" || slug == want))
-          printf "%s\t%s\t%s\t%s\n", slug, mem, sid, mod
+          printf "%s\t%s\t%s\t%s\t%s\n", slug, mem, sid, mod, src
       }
-      FNR == 1 { flush(); cur = FILENAME; sid = ""; mod = "" }
+      FNR == 1 { flush(); cur = FILENAME; sid = ""; mod = ""; src = "" }
       # Frontmatter only. A UUID quoted in the body is a reference, not provenance.
       FNR <= 25 && sid == "" && /^[[:space:]]*originSessionId:[[:space:]]*/ {
         sid = $0; sub(/^[^:]*:[[:space:]]*/, "", sid); gsub(/["'"'"'[:space:]]/, "", sid)
@@ -101,12 +110,22 @@ find "$PROJECTS_DIR" -path '*/memory/*.md' -type f -print0 2>/dev/null \
       FNR <= 25 && mod == "" && /^[[:space:]]*modified:[[:space:]]*/ {
         mod = $0; sub(/^[^:]*:[[:space:]]*/, "", mod); gsub(/["'"'"'[:space:]]/, "", mod)
       }
+      # originSessionId_source marks an origin RECOVERED from transcripts rather
+      # than stamped by Claude Code at write time. Without reading it, a derived
+      # origin renders identically to a first-party one -- which erases the exact
+      # distinction the label was added to preserve, and quietly upgrades an
+      # inference into a fact.
+      FNR <= 25 && src == "" && /^[[:space:]]*originSessionId_source:[[:space:]]*/ {
+        src = $0; sub(/^[^:]*:[[:space:]]*/, "", src); gsub(/["'"'"'[:space:]]/, "", src)
+      }
       END { flush() }
     ' want="$WANT_STORE" >> "$TMP/mem.tsv" || true
 
 : > "$TMP/mem.jsonl"
 if [ -s "$TMP/mem.tsv" ]; then
-  jq -R -c 'split("\t") | {store:.[0], memory:.[1], sid:(.[2] // ""), modified:(.[3] // "")}' \
+  jq -R -c 'split("\t")
+            | {store:.[0], memory:.[1], sid:(.[2] // ""),
+               modified:(.[3] // ""), src:(.[4] // "")}' \
     "$TMP/mem.tsv" > "$TMP/mem.jsonl" 2>/dev/null || : > "$TMP/mem.jsonl"
 fi
 
@@ -120,11 +139,15 @@ jq -rn \
   | ($mem | map(
       . as $m
       | (if ($m.sid == "") then null else ($byid[$m.sid] // null) end) as $name
+      # A recovered origin is evidence, not a stamp. Classifying it as BY would
+      # make an inference indistinguishable from a fact Claude Code recorded at
+      # write time -- and this tool exists precisely to keep sources apart.
+      | ($m.src != "") as $derived
       | {store:$m.store, memory:$m.memory, modified:$m.modified,
-         sid:$m.sid, session:$name,
+         sid:$m.sid, session:$name, src:$m.src, derived:$derived,
          finding:(if $m.sid == "" then "ANON"
-                  elif $name == null then "UNRESOLVED"
-                  else "BY" end)}
+                  elif $name == null then (if $derived then "DERIVED?" else "UNRESOLVED" end)
+                  else (if $derived then "DERIVED" else "BY" end) end)}
     )) as $all
 
   | ($all
@@ -157,8 +180,14 @@ jq -rn \
                "These carry no origin at all, so they can neither be attributed nor excluded."
              end)
         else
-          "  \($b) of \($t) attributable, \($a) anonymous. "
-          + "An ANON memory cannot be ruled out as a source, so it is not neutral evidence."
+          ($all | map(select(.derived)) | length) as $d
+          | "  \($b) of \($t) stamped at write time"
+            + (if $d > 0 then ", \($d) recovered from transcripts" else "" end)
+            + ", \($a) anonymous. "
+            + "An ANON memory cannot be ruled out as a source, so it is not neutral evidence."
+            + (if $d > 0 then
+                 " A DERIVED origin is evidence, not a record: enough to exclude a session, not to assert one."
+               else "" end)
         end
       )
     end

@@ -252,6 +252,55 @@ else
 fi
 say ""
 
+# ---- 4d. are the memory index limits still what we enforce? ------------
+# memory-lint and memory-verify both gate on 200 lines / 25,000 bytes, and for a
+# while those numbers were folklore: this repo's own research doc said the line
+# cap was "unsubstantiated" while two tools enforced it as fact. Both readings
+# were unverified, and a wrong threshold here fails silently in the worst
+# direction -- the index quietly stops loading its tail and nothing reports it.
+#
+# So read them out of the CLI instead of asserting them. Upstream destructures
+# {trimmed, lineCount, byteCount} and compares each against a constant; this
+# extracts the two identifiers from that expression and then resolves their
+# values, so a minifier rename moves the check with the code rather than
+# stranding it.
+say "4d. memory index limits match the CLI"
+if [ ! -e "${CLI_BIN:-}" ] || [ -d "${CLI_BIN:-/}" ]; then
+  say "      (skipped — cannot locate the CLI files)"
+else
+  WANT_LINES=$(jq -r '.memory_index_limits.lines // empty' "$CONTRACT" 2>/dev/null)
+  WANT_BYTES=$(jq -r '.memory_index_limits.bytes // empty' "$CONTRACT" 2>/dev/null)
+  FRAG=$(grep -aoE 'lineCount:[A-Za-z_$][A-Za-z0-9_$]*,byteCount:[A-Za-z_$][A-Za-z0-9_$]*\}=[^;]{0,120};' \
+         "$CLI_BIN" 2>/dev/null | head -1)
+  if [ -z "$FRAG" ]; then
+    # Not a pass. The limits may be unchanged, but this run did not check them.
+    warn "could not locate the index-truncation expression in the CLI — the 200/25000"
+    warn "thresholds this harness enforces went UNVERIFIED on this run, not confirmed."
+  else
+    LV=$(printf '%s' "$FRAG" | sed -n 's/.*lineCount:\([A-Za-z_$][A-Za-z0-9_$]*\),.*/\1/p')
+    BV=$(printf '%s' "$FRAG" | sed -n 's/.*byteCount:\([A-Za-z_$][A-Za-z0-9_$]*\)}.*/\1/p')
+    LLIM=$(printf '%s' "$FRAG" | sed -n "s/.*=${LV}>\([A-Za-z_\$][A-Za-z0-9_\$]*\).*/\1/p")
+    BLIM=$(printf '%s' "$FRAG" | sed -n "s/.*=${BV}>\([A-Za-z_\$][A-Za-z0-9_\$]*\).*/\1/p")
+    GOT_LINES=$(grep -aoE "(^|[^A-Za-z0-9_\$])${LLIM}=[0-9]+" "$CLI_BIN" 2>/dev/null | grep -oE '[0-9]+$' | head -1)
+    GOT_BYTES=$(grep -aoE "(^|[^A-Za-z0-9_\$])${BLIM}=[0-9]+" "$CLI_BIN" 2>/dev/null | grep -oE '[0-9]+$' | head -1)
+    if [ -z "$GOT_LINES" ] || [ -z "$GOT_BYTES" ]; then
+      warn "found the truncation expression but not both constants (lines='${GOT_LINES:-?}' bytes='${GOT_BYTES:-?}')"
+      warn "the thresholds went UNVERIFIED on this run."
+    else
+      [ "$GOT_LINES" = "$WANT_LINES" ] \
+        && ok "index line limit $GOT_LINES matches the contract" \
+        || warn "index LINE limit is $GOT_LINES upstream, contract says ${WANT_LINES:-unset} — memory-lint and memory-verify are gating on the wrong number."
+      [ "$GOT_BYTES" = "$WANT_BYTES" ] \
+        && ok "index byte limit $GOT_BYTES matches the contract" \
+        || warn "index BYTE limit is $GOT_BYTES upstream, contract says ${WANT_BYTES:-unset} — memory-lint and memory-verify are gating on the wrong number."
+      # The unit, not just the number. "byteCount" is why this harness reports
+      # bytes; if upstream ever switched to a character count, every threshold
+      # here would be measuring the wrong thing while still matching on value.
+      say "      upstream compares byteCount (bytes, not characters) and truncates lines first."
+    fi
+  fi
+fi
+say ""
 # ---- 5. informational: which live events the harness leaves unused -----
 if [ -n "$LIVE" ]; then
   say "5. valid events the harness does not hook (informational)"

@@ -13,6 +13,12 @@ PASS=0; FAIL=0
 TMP=$(mktemp -d); trap 'rm -rf "$TMP"' EXIT
 pass(){ echo "  OK: $1"; PASS=$((PASS+1)); }
 fail(){ echo "  FAIL: $1  $2"; FAIL=$((FAIL+1)); }
+# Defined because they were not, and calling one anyway printed "command not
+# found" while the suite still reported zero failures -- the assertion simply
+# never ran. Same names and argument order as every other suite here, so reaching
+# for the familiar one is no longer a silent skip.
+check_contains(){ case "$3" in *"$2"*) pass "$1" ;; *) fail "$1" "expected: $2" ;; esac; }
+check_absent(){   case "$3" in *"$2"*) fail "$1" "unexpected: $2" ;; *) pass "$1" ;; esac; }
 
 # The real list as of 2.1.228.
 ALL_EVENTS="PreToolUse, PostToolUse, PostToolUseFailure, PostToolBatch, Notification, UserPromptSubmit, UserPromptExpansion, SessionStart, SessionEnd, Stop, StopFailure, SubagentStart, SubagentStop, PreCompact, PostCompact, PermissionRequest, PermissionDenied, Setup, TeammateIdle, TaskCreated, TaskCompleted, Elicitation, ElicitationResult, ConfigChange, WorktreeCreate, WorktreeRemove, InstructionsLoaded, CwdChanged, FileChanged, DirectoryAdded, MessageDisplay"
@@ -54,6 +60,11 @@ ALL_SURFACE=$(jq -r '(.acknowledged_surface // {})
                      | (((.tools // {}) | keys[]?), ((.settings_keys // {}) | keys[]?))' \
               config/upstream-contract.json | grep -v '^_comment$')
 
+# 4d reads the two memory-index limits out of the CLI rather than trusting the
+# contract, so a "complete CLI" fixture has to carry that expression too. The
+# identifiers are deliberately NOT the ones the real bundle happens to use: the
+# check resolves them from the expression, and a fixture that reused the real
+# names would pass even if the check had them hardcoded.
 mkcli(){  # mkcli <path> [capability-to-omit]
   local out="$1" omit="${2:-}" k
   : > "$out"
@@ -61,6 +72,9 @@ mkcli(){  # mkcli <path> [capability-to-omit]
     [ "$k" = "$omit" ] && continue
     echo "$k" >> "$out"
   done
+  [ "$omit" = "__memlimits__" ] && return 0
+  local wl="${MEMLIMIT_LINES:-200}" wb="${MEMLIMIT_BYTES:-25000}"
+  echo "var qZ=$wl,zQ9=$wb;let{trimmed:aa,lineCount:bb,byteCount:cc}=T(e),dd=bb>qZ,ee=cc>zQ9;" >> "$out"
 }
 mkcli "$TMP/fullcli"
 
@@ -197,6 +211,52 @@ while IFS= read -r ev; do
     || UNACK="$UNACK $ev"
 done < <(jq -r '.hooks | keys[]' config/settings.json)
 [ -z "$UNACK" ] && pass "settings.json events all acknowledged" || fail "settings.json events all acknowledged" "unacked:$UNACK"
+
+echo ""
+echo "=== 4d: the memory index limits are READ from the CLI, not asserted ==="
+# memory-lint and memory-verify gate on 200 lines / 25,000 bytes. Those numbers
+# were folklore here for a while -- the research doc called the line cap
+# "unsubstantiated" while two tools enforced it as fact -- and a wrong threshold
+# fails in the worst direction: the index quietly stops loading its tail and
+# nothing says so.
+OUT=$(run "$ALL_EVENTS" "$ALL_MODES")
+printf '%s' "$OUT" | grep -qF "index line limit 200 matches" \
+  && pass "matching limits are confirmed by value" || fail "matching limits are confirmed by value" "$OUT"
+printf '%s' "$OUT" | grep -qF "index byte limit 25000 matches" \
+  && pass "and the byte limit too" || fail "and the byte limit too" "$OUT"
+printf '%s' "$OUT" | grep -qF "byteCount (bytes, not characters)" \
+  && pass "names the unit, not just the number" || fail "names the unit, not just the number" "$OUT"
+
+# If upstream moves a limit, the check must say which way and name both numbers.
+# A bare "mismatch" leaves the reader unable to tell whether the harness is now
+# too strict (noise) or too loose (silent truncation).
+mkcli "$TMP/movedcli"
+MEMLIMIT_LINES=150 mkcli "$TMP/movedcli"
+OUT=$(CLAUDE_CLI_BIN="$TMP/movedcli" run "$ALL_EVENTS" "$ALL_MODES"); ST=$?
+printf '%s' "$OUT" | grep -qF "index LINE limit is 150 upstream" \
+  && pass "a moved LINE limit is reported" || fail "a moved LINE limit is reported" "$OUT"
+printf '%s' "$OUT" | grep -qF "contract says 200" \
+  && pass "and names what the contract claims" || fail "and names what the contract claims" "$OUT"
+printf '%s' "$OUT" | grep -qF "gating on the wrong number" \
+  && pass "and says which tools are wrong" || fail "and says which tools are wrong" "$OUT"
+[ "$ST" != "0" ] && pass "a moved limit is not exit 0" || fail "a moved limit is not exit 0" "exit=$ST"
+
+MEMLIMIT_BYTES=30000 mkcli "$TMP/movedbytes"
+OUT=$(CLAUDE_CLI_BIN="$TMP/movedbytes" run "$ALL_EVENTS" "$ALL_MODES")
+printf '%s' "$OUT" | grep -qF "index BYTE limit is 30000 upstream" \
+  && pass "a moved BYTE limit is reported" || fail "a moved BYTE limit is reported" "$OUT"
+
+# The property that matters most. A CLI this cannot parse must read as
+# UNVERIFIED, never as a pass -- "we could not check" and "we checked and it is
+# fine" are the same output only if you let them be.
+mkcli "$TMP/nolimits" __memlimits__
+OUT=$(CLAUDE_CLI_BIN="$TMP/nolimits" run "$ALL_EVENTS" "$ALL_MODES")
+printf '%s' "$OUT" | grep -qF "UNVERIFIED on this run" \
+  && pass "an unparseable CLI says UNVERIFIED" || fail "an unparseable CLI says UNVERIFIED" "$OUT"
+printf '%s' "$OUT" | grep -qF "matches the contract" \
+  && fail "and does not claim a match" "reported a match it never verified" \
+  || pass "and does not claim a match"
+
 
 echo ""
 echo "--- Results: $PASS passed, $FAIL failed ---"

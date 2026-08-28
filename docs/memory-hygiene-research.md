@@ -19,10 +19,22 @@ readable, but read them with these corrections:
   setting is read (`if (!available) return false`). Where the flag is off there is **no toggle to
   turn on** — the `/memory` row is hidden and the setting is inert. The recommendation to "open
   /memory and enable it" is therefore not always actionable.
-- **§2's ~200-line index cap is unsubstantiated.** No such line limit was found in 2.1.228.
-  `MEMORY.md` is loaded through the ordinary CLAUDE.md loader. The nearest constant is a 200 000-entry
-  guard in the *sync* scanner — a different path. The real constraint is token budget, which is what
-  the `/context` advisory measures (it fires above both 5% of context and 5000 tokens).
+- **§2's ~200-line index cap: CORRECTED 2026-08-27, it is real.** This entry previously read
+  "unsubstantiated — no such line limit was found in 2.1.228", and that finding was wrong. It came
+  from searching for a constant rather than for the comparison that uses one. In 2.1.250 the index
+  loader destructures `{trimmed, lineCount, byteCount}` and tests `lineCount > 200` and
+  `byteCount > 25000`; truncation is line-first (`split("\n").slice(0, 200)`) and then clamped to
+  the byte limit, so passing line 200 drops everything after it. The size limit is **bytes** — the
+  identifier is literally `byteCount` — which is why the harness reports bytes, not characters.
+  `bin/upstream-check.sh` section 4d now re-reads both numbers from the CLI on every run, resolving
+  the minified identifiers from the expression so a rename moves the check with the code.
+  Token budget is a *separate* constraint, and the `/context` advisory (above both 5% of context and
+  5000 tokens) measures that one, not this.
+
+  Worth keeping as a method note: two readings of this codebase were unverified in opposite
+  directions at the same time — this doc called the limit folklore while `memory-verify` and
+  `memory-lint` enforced 200 as fact, and neither side had read the comparison. A grep for a value
+  cannot see a threshold; only the comparison can.
 
 Also worth separating: `tengu_memory_threshold_crossed` is a Node process RAM monitor, unrelated to
 the memory store, and should not be read as a store-size nudge.

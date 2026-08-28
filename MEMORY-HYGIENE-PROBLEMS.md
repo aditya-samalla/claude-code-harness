@@ -7,10 +7,14 @@ estimated. Main store is `~/.claude/projects/<slug>/memory`
 ## Problems
 
 1. **The index exceeds its load limit and structurally cannot comply.**
-   219 lines against a 200-line limit (second limit ~25,000 chars; currently
+   219 lines against a 200-line limit (second limit 25,000 BYTES; currently
    23.5KB, under). 218 memories, one line each. Past either limit the tail is
    dropped silently at session start. Shortening hooks only relieves the
-   CHARACTER limit — the LINE limit needs fewer entries.
+   BYTE limit — the LINE limit needs fewer entries.
+   (Both limits verified against the CLI 2026-08-27: upstream compares
+   `lineCount > 200` and `byteCount > 25000`. The size one is bytes, not
+   characters — em-dashes are three, so a compliant character count can still
+   be over. See docs/memory-hygiene-research.md and upstream-check 4d.)
 
 2. **6% of wiki-links are broken** — 35 of 588 do not resolve to a file.
 
@@ -166,7 +170,7 @@ artifact - hooks were hand-clipped to a ~110 char budget when written, and the
 corpus shows it: median 106 chars, p90 110, and only 6 of 220 lines above it.
 
 The budget is still worth enforcing, for a different reason than assumed. The
-index as a whole has a ~25,000 character limit, and at one line per memory the
+index as a whole has a 25,000 BYTE limit, and at one line per memory the
 per-line length is the only lever on it: 220 x 110 = 24,200, already at the
 edge. So compose hooks to the budget - but because of the total, not because
 anything truncates a single line.

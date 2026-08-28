@@ -22,10 +22,8 @@
     "capability no one has noticed will not appear here on its own — that is a",
     "standing limitation, and the check prints it rather than implying coverage."
   ],
-
-  "last_verified_version": "2.1.248 (Claude Code)",
+  "last_verified_version": "2.1.250 (Claude Code)",
   "last_verified_date": "2026-08-27",
-
   "acknowledged_surface": {
     "_comment": [
       "Capability -> the decision a human made about it. Verified by substring",
@@ -42,7 +40,6 @@
       "dialogExpiry": "Acknowledged 2026-08-27, deliberately NOT set. Governs how long a held inbound message waits for approval (default five minutes). The default is right for interactive use; a long-running `claude -p` worker wanting unattended delivery should set crossSessionInbound rather than stretch this."
     }
   },
-
   "acknowledged_hook_events": [
     "ConfigChange",
     "CwdChanged",
@@ -76,7 +73,6 @@
     "WorktreeCreate",
     "WorktreeRemove"
   ],
-
   "notes_on_unused_events": {
     "PermissionRequest": "Candidate: with defaultMode auto the classifier resolves prompts a human used to see, so auditing its decisions would restore the lost record.",
     "PostCompact": "Candidate: pre-compact.sh backs up the transcript; a post-compact counterpart could record what survived.",
@@ -99,9 +95,7 @@
     "MessageDisplay": "Not adopted: presentation-layer only.",
     "UserPromptExpansion": "Not adopted: presentation-layer only."
   },
-
   "expected_default_mode": "auto",
-
   "upstream_features_that_overlap_this_harness": {
     "_comment": "Reviewed 2026-08-12. If the harness duplicates one of these, delete the harness copy rather than maintaining two.",
     "auto-mode classifier": "Adjudicates the permission prompts the guards' ask tier used to send to a human. See README 'Auto mode'.",
@@ -109,5 +103,27 @@
     "auto-dream memory consolidation": "Background memory hygiene with its own lock and rollback. See MEMORY-HYGIENE-RESEARCH.md — do not rebuild it.",
     "shared/team memory sync": "Server-side concurrent-write rejection, mass-delete guard, and secret scanning on memory writes.",
     "sandbox": "OS-level containment; the real boundary the regex guards only approximate."
+  },
+  "memory_index_limits": {
+    "_comment": [
+      "The two thresholds that decide how much of MEMORY.md is loaded, read out of",
+      "the CLI rather than assumed. They were folklore here for a while: this repo's",
+      "own research doc recorded '~200-line index cap is unsubstantiated', while",
+      "memory-verify and memory-lint both enforced 200 as fact. Both turned out to",
+      "be right about the number and wrong about the confidence.",
+      "",
+      "Upstream destructures {trimmed, lineCount, byteCount} and tests",
+      "lineCount > <lines> and byteCount > <bytes>. The size limit is BYTES -- the",
+      "identifier is literally byteCount -- which is why this harness reports bytes.",
+      "Truncation is line-first: the index is cut to <lines> lines, then clamped to",
+      "<bytes>, so passing line 200 drops everything after it.",
+      "",
+      "Section 4d re-extracts both numbers by name, so a minifier rename cannot",
+      "strand the check the way a hardcoded identifier would."
+    ],
+    "lines": 200,
+    "bytes": 25000,
+    "verified_in": "2.1.250 (Claude Code)",
+    "verified_date": "2026-08-27"
   }
 }

@@ -34,18 +34,69 @@ case "$FILE" in
   *) exit 0 ;;
 esac
 BASE=$(basename "$FILE")
-case "$BASE" in
-  MEMORY.md|ARCHIVE.md) exit 0 ;;
-esac
 [ -f "$FILE" ] || exit 0
 
-DIR=$(dirname "$FILE")
 INDEX_LINE_MAX="${MEMORY_INDEX_LINE_MAX:-110}"
-# Same limits memory-verify reports OVERSIZE against; the per-line budget is
-# only enforced once the index approaches them.
-INDEX_MAX_CHARS="${MEMORY_INDEX_MAX_CHARS:-25000}"
-INDEX_PRESSURE_CHARS="${MEMORY_INDEX_PRESSURE_CHARS:-20000}"
+# The same limits memory-verify reports OVERSIZE against. Measured in BYTES:
+# wc -c counts bytes, and the upstream limit is 25KB, not 25,000 characters. The
+# distinction is not academic here -- em-dashes and arrows are multi-byte, so a
+# real index runs ~2% larger in bytes than in characters, which is enough to sit
+# inside the limit on one measure and outside it on the other. These names say
+# BYTES so nobody reads a passing character count as compliance.
+# The env var names keep their historical _CHARS spelling so existing overrides
+# and tests keep working; the values they carry are and always were bytes.
+INDEX_MAX_BYTES="${MEMORY_INDEX_MAX_CHARS:-25000}"
+INDEX_PRESSURE_BYTES="${MEMORY_INDEX_PRESSURE_CHARS:-20000}"
 INDEX_PRESSURE_LINES="${MEMORY_INDEX_PRESSURE_LINES:-180}"
+INDEX_MAX_LINES="${MEMORY_INDEX_MAX_LINES:-200}"   # same name memory-verify reads
+
+# ---- the index itself ---------------------------------------------------
+# MEMORY.md used to exit here unchecked, and that is why tier ordering decayed:
+# every memory write appends to the index, nothing ever looked at the index on
+# write, and feedback_ entries drifted below the truncation cut where they stop
+# being loaded at all. Measured on a live store: ordering went from clean to two
+# feedback_ entries past the cut in under two hours.
+#
+# The per-memory checks below do not apply to an index, so this is its own pass.
+if [ "$BASE" = "MEMORY.md" ]; then
+  IBYTES=$(wc -c < "$FILE" | tr -d ' ')
+  ILINES=$(wc -l < "$FILE" | tr -d ' ')
+  IFIND=""
+  iadd() { IFIND="${IFIND}  - $1
+"; }
+
+  [ "$IBYTES" -gt "$INDEX_MAX_BYTES" ] \
+    && iadd "index is ${IBYTES} bytes, over the ~${INDEX_MAX_BYTES} limit — everything past it is dropped at session start. Shorten hooks; that is the only lever on bytes that does not cost an entry."
+  [ "$ILINES" -gt "$INDEX_MAX_LINES" ] \
+    && iadd "index is ${ILINES} lines, over the ${INDEX_MAX_LINES}-line limit. One line per memory, so only fewer entries fixes this — archive settled project_ memories, never feedback_."
+
+  # The harm is never the limit, it is WHICH entries fall past it. A tail of
+  # settled project_ entries is the designed sacrifice; a feedback_ entry there
+  # is silently not loaded, and feedback_ only works when loaded.
+  BELOW=$(grep -n '^- \[' "$FILE" 2>/dev/null | awk -F: -v cut="$INDEX_MAX_LINES" '$1>cut' | grep -c 'feedback_' || true)
+  [ "${BELOW:-0}" -gt 0 ] \
+    && iadd "${BELOW} feedback_ memor$([ "$BELOW" = 1 ] && echo y || echo ies) sit past line ${INDEX_MAX_LINES} and will not load. Re-run \`memory-index.sh --write\` to restore tier order, or move them up by hand."
+
+  # A line that is neither an entry nor a tier marker is usually an append with
+  # no trailing newline that collided with the next line. It stops being an
+  # entry, so the memory silently leaves the index -- and a reorder would drop
+  # it outright.
+  STRAY=$(awk 'NF && $0 !~ /^- \[/ && $0 !~ /^<!--/' "$FILE" 2>/dev/null | wc -l | tr -d ' ')
+  [ "${STRAY:-0}" -gt 0 ] \
+    && iadd "${STRAY} line(s) are neither an entry nor a tier marker — likely an append with no trailing newline fused to the next line. Repair before reordering, or the entry is discarded."
+
+  if [ -n "$IFIND" ]; then
+    printf 'memory-lint on %s:\n%s\n' "$BASE" "$IFIND"
+    printf 'The index is what tells the model a memory exists. Fix these now.\n'
+    exit 2
+  fi
+  exit 0
+fi
+case "$BASE" in
+  MEMORY_ARCHIVE.md|ARCHIVE.md) exit 0 ;;
+esac
+
+DIR=$(dirname "$FILE")
 
 # Volatile state in a SUMMARY - the description or the index hook. Wider than
 # OPEN_RE, because a summary saying "in progress" or "unreviewed" is a status
@@ -149,25 +200,31 @@ if [ -f "$DIR/MEMORY.md" ]; then
     add "no line in MEMORY.md points at $BASE, so it will never be recalled. Add one, in the section for its type."
   else
     # Nothing clips an index line on the way in - a 109-char line arrives in
-    # the session verbatim. The budget exists because the index as a WHOLE has
-    # a ~25,000 character limit, and one line per memory means the per-line
+    # the session verbatim. The budget exists because the index as a WHOLE is
+    # capped near 25,000 BYTES, and one line per memory means the per-line
     # average is the only lever on it: 220 entries x 110 chars is already
-    # 24,200. Compose the hook to fit. Hand-clipping to fit is what left a live
-    # index with entries ending "per-policy ms ALREADY" and "superset".
+    # 24,200, and more than that in bytes -- an em-dash is three. Compose the
+    # hook to fit. Hand-clipping is what left a live index with entries ending
+    # "per-policy ms ALREADY" and "superset".
     # The per-line budget exists ONLY because the index as a whole is capped
-    # near 25,000 characters and holds one line per memory, so per-line length
+    # near 25,000 bytes and holds one line per memory, so per-line length
     # is the single lever on the total. A store with 6 memories and a 2KB index
     # has enormous headroom, and nagging about a long hook there is noise that
     # would teach the reader to ignore the check. Measured: enforcing it
     # unconditionally produced 72 findings across seven small stores, every one
     # of them pointless. So enforce it only when the index is actually under
     # pressure.
-    IDX_CHARS=$(wc -c < "$DIR/MEMORY.md" | tr -d ' ')
+    # Two units on purpose, matching upstream: the index TOTAL is a byte size
+    # (wc -c; the truncation warning states it in KB), while the per-entry
+    # budget upstream states is in characters. ILEN stays ${#IDX} for that
+    # reason. Naming them apart is the fix -- calling the byte total "chars" is
+    # what let a 24,688-character index read as compliant at 25,150 bytes.
+    IDX_BYTES=$(wc -c < "$DIR/MEMORY.md" | tr -d ' ')
     IDX_LINES=$(wc -l < "$DIR/MEMORY.md" | tr -d ' ')
-    if [ "$IDX_CHARS" -ge "$INDEX_PRESSURE_CHARS" ] || [ "$IDX_LINES" -ge "$INDEX_PRESSURE_LINES" ]; then
+    if [ "$IDX_BYTES" -ge "$INDEX_PRESSURE_BYTES" ] || [ "$IDX_LINES" -ge "$INDEX_PRESSURE_LINES" ]; then
       ILEN=${#IDX}
       [ "$ILEN" -gt "$INDEX_LINE_MAX" ] \
-        && add "its index line is $ILEN chars. This index is at $IDX_CHARS chars of ~$INDEX_MAX_CHARS and $IDX_LINES lines, so per-line length is the only lever left on the total — compose the hook under $INDEX_LINE_MAX."
+        && add "its index line is $ILEN chars. This index is at $IDX_BYTES bytes of ~$INDEX_MAX_BYTES and $IDX_LINES lines, so per-line length is the only lever left on the total — compose the hook under $INDEX_LINE_MAX."
     fi
 
     # An index hook carrying changing state is the drift no checker can catch.

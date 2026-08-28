@@ -139,10 +139,11 @@ check_contains "orphan flagged" "no line in MEMORY.md points at orphan.md" "$(li
 check_absent   "indexed one is not" "no line in MEMORY.md"                 "$(lint "$STORE/indexed.md")"
 
 echo ""
-echo "=== the index line has a character budget, counted in CHARACTERS ==="
-# The whole index is capped around 25,000 chars and holds one line per memory,
-# so per-line length is the only lever. Em-dashes make bytes != characters, and
-# counting bytes would flag lines that are actually within budget.
+echo "=== the index LINE budget is counted in CHARACTERS, unlike the total ==="
+# Two units, matching upstream: the index TOTAL is a byte size (the truncation
+# warning states it in KB) while the per-entry budget upstream states is in
+# characters. Em-dashes make the two differ, so this asserts the per-line check
+# stays on characters -- counting its bytes would flag lines within budget.
 : > "$STORE/MEMORY.md"
 write_mem budget "a description" "body"
 LONG=$(printf 'x%.0s' $(seq 1 130))
@@ -242,6 +243,54 @@ check_eq "store byte-identical" "$SUM_BEFORE" "$SUM_AFTER"
 check_eq "exit 2 is advice, not a block" "2" "$(lint_rc "$STORE/untouched.md")"
 
 echo ""
+echo ""
+echo "=== the INDEX itself is checked on write, not skipped ==="
+# MEMORY.md used to exit unchecked. Every memory write appends to the index and
+# nothing looked at the index on write, so tier order decayed until feedback_
+# entries sat past the truncation cut and stopped loading entirely.
+: > "$STORE/MEMORY.md"
+write_mem idx_a "a description" "body"
+OUT=$(lint "$STORE/MEMORY.md")
+check_eq "a healthy index is silent" "" "$OUT"
+check_eq "and exits 0"               "0" "$(lint_rc "$STORE/MEMORY.md")"
+
+# A feedback_ entry past line 200 is the harm: it is not loaded, and feedback_
+# only works when loaded. Build an index whose tail holds one.
+{ i=0; while [ "$i" -lt 205 ]; do echo "- [T](reference_pad_$i.md) — hook"; i=$((i+1)); done
+  echo "- [T](feedback_stranded.md) — hook"; } > "$STORE/MEMORY.md"
+OUT=$(lint "$STORE/MEMORY.md")
+check_contains "a feedback_ entry past the cut is flagged" "past line 200" "$OUT"
+check_contains "says it will not load"                     "will not load"  "$OUT"
+check_contains "over-length index is flagged"              "over the 200-line limit" "$OUT"
+check_eq       "and exits 2"                               "2" "$(lint_rc "$STORE/MEMORY.md")"
+
+# The cut is a setting shared with memory-verify, not a constant baked into the
+# message. If it were hardcoded, the two tools could disagree about where the
+# tail begins and each would still look self-consistent.
+OUT=$(MEMORY_INDEX_MAX_LINES=50 lint "$STORE/MEMORY.md")
+check_contains "the cut follows the configured limit" "past line 50" "$OUT"
+check_absent   "and is not hardcoded at 200"          "past line 200" "$OUT"
+
+# A stray line stops being an entry, so the memory silently leaves the index.
+{ echo "<!-- FEEDBACK -->"
+  echo "- [T](reference_ok.md) — hook"
+  echo "grep -c . MEMORY.md; tail -2 MEMORY.md- [T](feedback_fused.md) — hook"; } > "$STORE/MEMORY.md"
+OUT=$(lint "$STORE/MEMORY.md")
+check_contains "a fused line is flagged"     "neither an entry nor a tier marker" "$OUT"
+check_contains "names the likely cause"      "no trailing newline" "$OUT"
+check_absent   "a tier marker is not a stray" "2 line(s) are neither" "$OUT"
+
+# Size is measured in BYTES. Em-dashes are multi-byte, so a character count can
+# read as compliant while the byte count is over and the tail is truncated.
+DASHY=$(printf -- '— %.0s' $(seq 1 400))
+{ echo "- [T](reference_ok.md) — $DASHY"; } > "$STORE/MEMORY.md"
+OUT=$(MEMORY_INDEX_MAX_CHARS=500 lint "$STORE/MEMORY.md")
+check_contains "over-size index reports BYTES" "bytes" "$OUT"
+
+# The archive index is not the loaded index and has no such limits.
+echo "- [T](x.md) — hook" > "$STORE/MEMORY_ARCHIVE.md"
+check_eq "MEMORY_ARCHIVE.md is ignored" "0" "$(lint_rc "$STORE/MEMORY_ARCHIVE.md")"
+
 echo ""
 echo "--- Results: $PASS passed, $FAIL failed ---"
 [ "$FAIL" -eq 0 ]

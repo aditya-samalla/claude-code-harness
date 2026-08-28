@@ -395,18 +395,21 @@ check_eq "oversize alone still exits 2 (needs attention)" "2" "$RC"
 unset MEMORY_INDEX_MAX_LINES
 
 echo ""
-echo "=== An index past the CHAR limit is OVERSIZE even when the line count is fine ==="
+echo "=== An index past the BYTE limit is OVERSIZE even when the line count is fine ==="
 : > "$STORE/MEMORY.md"
 LONG=$(printf 'x%.0s' 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0)
 i=0
 while [ "$i" -lt 10 ]; do echo "- [a](a.md) — $LONG" >> "$STORE/MEMORY.md"; i=$((i+1)); done
 export MEMORY_INDEX_MAX_CHARS=100
 OUT=$(run)
-check_contains "flagged on chars"     "OVERSIZE" "$OUT"
-check_contains "names the char limit" "/100 chars" "$OUT"
+check_contains "flagged on size"      "OVERSIZE" "$OUT"
+# Bytes, not characters. wc -c counts bytes and the upstream limit is stated in
+# KB, so reporting the same number as "chars" is what let a 24,688-character
+# index read as compliant while measuring 25,150 bytes and still being truncated.
+check_contains "names the byte limit" "/100 bytes" "$OUT"
 unset MEMORY_INDEX_MAX_CHARS
 OUT=$(run)
-check_absent "and is silent again at the default char limit" "OVERSIZE" "$OUT"
+check_absent "and is silent again at the default byte limit" "OVERSIZE" "$OUT"
 
 # ---------------------------------------------------------------------------
 # Curation pass. Overlap only — there is deliberately no retirement heuristic.

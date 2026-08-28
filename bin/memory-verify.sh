@@ -57,7 +57,9 @@ TRIAGE_MIN_AGE_DAYS="${MEMORY_TRIAGE_MIN_AGE_DAYS:-14}"
 # Index load limits. Past either one the tail is silently dropped at session
 # start, so the oldest entries stop reaching the model.
 INDEX_MAX_LINES="${MEMORY_INDEX_MAX_LINES:-200}"
-INDEX_MAX_CHARS="${MEMORY_INDEX_MAX_CHARS:-25000}"
+# Byte limit. The env var keeps its historical _CHARS spelling so existing
+# overrides keep working; the value it carries is and always was bytes.
+INDEX_MAX_BYTES="${MEMORY_INDEX_MAX_CHARS:-25000}"
 CURATE=0
 
 while [ $# -gt 0 ]; do
@@ -254,15 +256,18 @@ scan_index_size() {
   local dir="$1" slug="$2"
   local idx="$dir/MEMORY.md"
   [ -f "$idx" ] || return 0
-  local lines chars entries over
+  local lines bytes entries over
   lines=$(wc -l < "$idx" | tr -d ' ')
-  chars=$(wc -c < "$idx" | tr -d ' ')
+  # BYTES, not characters: wc -c counts bytes and the upstream limit is 25KB.
+  # Reporting this number as "chars" is how a 24,688-character index got called
+  # compliant while measuring 25,150 bytes and still being truncated.
+  bytes=$(wc -c < "$idx" | tr -d ' ')
   entries=$(grep -c '^- \[' "$idx" 2>/dev/null || true)
   over=""
   [ "$lines" -gt "$INDEX_MAX_LINES" ] && over="${lines}/${INDEX_MAX_LINES} lines"
-  if [ "$chars" -gt "$INDEX_MAX_CHARS" ]; then
+  if [ "$bytes" -gt "$INDEX_MAX_BYTES" ]; then
     [ -n "$over" ] && over="$over, "
-    over="${over}${chars}/${INDEX_MAX_CHARS} chars"
+    over="${over}${bytes}/${INDEX_MAX_BYTES} bytes"
   fi
   [ -n "$over" ] || return 0
   emit OVERSIZE "$slug" "MEMORY.md" \

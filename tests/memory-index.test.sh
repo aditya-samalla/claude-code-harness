@@ -131,5 +131,32 @@ check_eq "exit 3" "3" "$(bash "$SCRIPT_UT" --store nosuchstore >/dev/null 2>&1; 
 
 echo ""
 echo ""
+echo "=== a line that is not an entry aborts, rather than being dropped ==="
+# The permutation check filters both sides with `^- [`, the same predicate the
+# reordering uses, so a line failing that predicate is equally absent from both
+# and the check passes while the line disappears. Measured on a live store: an
+# append with no trailing newline left a shell command fused to the front of an
+# entry, and the memory silently left the index.
+mem stray_a feedback
+mem stray_b feedback
+{ echo "- [T](stray_a.md) — hook"
+  echo "grep -c . MEMORY.md; tail -2 MEMORY.md- [T](stray_b.md) — hook"; } > "$STORE/MEMORY.md"
+BEFORE=$(cat "$STORE/MEMORY.md")
+OUT=$(run --write)
+check_contains "a stray line is named"        "neither an entry nor a tier marker" "$OUT"
+check_contains "the stray's text is shown"    "stray_b.md"                          "$OUT"
+check_contains "says why it would be lost"    "discard them silently"               "$OUT"
+check_contains "names the likely cause"       "no trailing newline"                 "$OUT"
+check_eq       "aborts with 3"                "3" "$(run_rc --write)"
+check_eq       "and writes nothing"           "$BEFORE" "$(cat "$STORE/MEMORY.md")"
+
+# A tier marker is a comment, not a stray, and must not trip the guard.
+{ echo "<!-- FEEDBACK — how to work -->"
+  echo "- [T](stray_a.md) — hook"
+  echo "- [T](stray_b.md) — hook"; } > "$STORE/MEMORY.md"
+OUT=$(run --write)
+check_absent "a tier marker is not a stray" "neither an entry nor a tier marker" "$OUT"
+
+echo ""
 echo "--- Results: $PASS passed, $FAIL failed ---"
 [ "$FAIL" -eq 0 ]

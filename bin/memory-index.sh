@@ -134,6 +134,25 @@ for dir in "$PROJECTS"/*/memory; do
     exit 3
   fi
 
+  # The check above cannot see its own blind spot: it filters both sides with
+  # `^- [`, the same predicate the reordering uses. A line that fails that
+  # predicate is equally absent from BOTH sides, so the comparison passes while
+  # the line is dropped. Measured on a live store: an index entry acquired a
+  # leaked shell-command prefix from an append with no trailing newline
+  # ("grep -c . MEMORY.md; tail -2 MEMORY.md- [AgentTool unblocked...").
+  # It stopped being an entry, the permutation check saw nothing wrong, and the
+  # memory silently left the index -- which is the only way the model learns it
+  # exists. A checker whose population is defined by the predicate under test
+  # cannot catch a failure of that predicate, so this counts EVERY line.
+  awk 'NF && $0 !~ /^- \[/ && $0 !~ /^<!--/ { print }' "$idx" > "$TMP/strays"
+  if [ -s "$TMP/strays" ]; then
+    echo "ABORT $slug: $(wc -l < "$TMP/strays" | tr -d ' ') line(s) in the index are neither an entry nor a tier marker." >&2
+    echo "  Reordering would discard them silently. Repair them first:" >&2
+    cut -c1-100 "$TMP/strays" | sed 's/^/    /' >&2
+    echo "  A stray is usually an append with no trailing newline colliding with the next line." >&2
+    exit 3
+  fi
+
   n=$(wc -l < "$TMP/a" | tr -d ' ')
   if cmp -s "$idx" "$TMP/new"; then
     [ -n "$ONLY_STORE" ] && echo "$slug: already ordered ($n entries)"

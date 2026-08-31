@@ -21,8 +21,13 @@ re-deriving them wastes a session:
    tail-first, so an append-ordered index drops the *newest* entries — measured
    once as 19 entries past the cut, 5 of them `feedback_` memories, which shape
    behaviour and are worthless unless loaded. `bin/memory-index.sh` fixes that by
-   tiering the index. **Run it before archiving anything**: if ordering alone
+   tiering the index, and orders `reference` and `project` newest-first inside
+   their tiers. **Run it before archiving anything**: if ordering alone
    puts every `feedback_` above the cut, the pressure may not need relieving at all.
+   If it is genuinely over budget, `--archive-overflow` moves the cheapest end
+   into `MEMORY_ARCHIVE.md` mechanically and leaves a pointer. Use it for the
+   bulk, and spend your judgement on what deserves promoting UP into the ACTIVE
+   block — the decision a tool cannot make.
 
 ## Before you begin
 

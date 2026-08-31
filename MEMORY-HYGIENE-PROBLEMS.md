@@ -70,6 +70,22 @@ so **compaction cannot reclaim index lines**.
 Standing principle: deleting on a heuristic destroys knowledge silently, which
 is strictly worse than staleness. The tool reports; a human decides.
 
+**`memory-index.sh --archive-overflow` is not a third such heuristic, and the
+difference is worth stating so it is not mistaken for one.** Both withdrawn
+heuristics tried to judge a memory's WORTH from its content - lesson-shaped
+wording, a shared ticket key - and both were wrong because no content signal
+separates a dead status record from a durable fact. The overflow archiver
+judges nothing. It moves exactly the lines the session loader would have
+dropped anyway, in exactly the order it would have dropped them, and writes
+them down. The comparison is not "archive vs. keep", which would need
+judgement; it is "recorded vs. silent", which does not. Nothing is deleted, the
+memory file stays on disk, and the index keeps a pointer.
+
+It is also opt-in: without the flag the tool still only reports, so the
+standing principle holds by default. And it does not claim to solve the size
+problem - see below, it cannot be solved. It makes running out of room
+observable instead of invisible.
+
 ## Better rule, derived during the audit
 
 For completed work, **keep the technique and the mechanism facts, drop the

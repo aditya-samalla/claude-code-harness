@@ -185,6 +185,27 @@ use — twice in one session a project entry landed in the middle of the referen
 section. The reorder is a pure permutation and aborts rather than write if the
 set of entry lines changed at all.
 
+**Ordering is newest-first inside `reference` and `project` both.** Reference
+kept append order until 2026-08-31, which parked the freshest fact at the cut:
+on a live 283-memory store the last two reference entries were both written
+that same day, while facts from three months earlier sat safely at the top.
+
+**If the index is over its budget, add `--archive-overflow`:**
+
+```bash
+bash ~/.claude/memory-index.sh --store <slug> --archive-overflow
+```
+
+It moves the cheapest end — oldest project first, then oldest reference — into
+`MEMORY_ARCHIVE.md`, leaves a pointer line in `MEMORY.md`, and drains to a
+margin below the cap rather than to the cap itself, so the index stays
+compliant between runs. It never touches ACTIVE, `feedback`, or untyped
+entries. **This is not the withdrawn "retire settled memories" heuristic** —
+it judges nothing about worth, it just writes down what truncation was going
+to take anyway. Measured: a store growing ~14 memories a day cannot hold any
+fixed headroom, so the index is permanently at its cap and the only question
+is whether the loss is recorded. See `MEMORY-HYGIENE-PROBLEMS.md`.
+
 Only then look at shedding entries. `--curate` reports pairs of memories making
 the same claims:
 

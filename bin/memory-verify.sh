@@ -205,6 +205,18 @@ OPEN_RE='\b(pending (review|merge|approval|deploy|release|sign-?off)|(is|still) 
 TERMINAL_RE='^(Done|Closed|Resolved|Won.t Do|Mitigated|IR Published)$'
 CLOSED_RE='\b(merged|shipped|deployed|landed|resolved|verified in prod)\b'
 
+# True when this memory's index line has already been moved to the archive.
+# SETTLED's whole advice is "the index line can move to the archive section", so
+# for a line already there the finding is vacuous - and it costs a reader the
+# detour of opening the memory to discover that. Measured on a real store: all 7
+# SETTLED findings on one run were already archived. Matched on the link TARGET,
+# the same way memory-index.sh recognises its own pointer, so a line moved by
+# hand counts too.
+archived_already() {
+  [ -f "$1/MEMORY_ARCHIVE.md" ] || return 1
+  grep -qF "]($2)" "$1/MEMORY_ARCHIVE.md"
+}
+
 # There is deliberately NO "retire this memory" heuristic here, and the reason
 # is worth recording so the idea is not re-invented. Staleness is not the test:
 # an audit of a real 204-memory store found four verifiably stale memories and
@@ -298,7 +310,10 @@ scan_curation() {
     [ -f "$f" ] || continue
     base=$(basename "$f")
     [ "$base" = "MEMORY.md" ] && continue
-    [ "$base" = "ARCHIVE.md" ] && continue
+    # MEMORY_ARCHIVE.md, not ARCHIVE.md: this guard named a file that has never
+    # existed, so the archive's index lines were mined for claims like any
+    # memory and could pair a live memory against its own archived hook.
+    [ "$base" = "MEMORY_ARCHIVE.md" ] && continue
     grep -o '\*\*[^*]\{25,160\}\*\*' "$f" 2>/dev/null \
       | sed 's/\*\*//g' | tr 'A-Z' 'a-z' | tr -s ' \t' ' ' \
       | sed 's/^ //; s/ $//' | sort -u \
@@ -339,6 +354,10 @@ scan_store() {
     [ -f "$f" ] || continue
     base=$(basename "$f")
     [ "$base" = "MEMORY.md" ] && continue
+    # Neither index is a memory. The archive carries index lines whose hooks
+    # quote the memories they point at, so scanning it re-reports their claims
+    # against a file with no frontmatter, no type and no verify block.
+    [ "$base" = "MEMORY_ARCHIVE.md" ] && continue
 
     claims=$(verify_lines "$f")
     if [ -n "$claims" ]; then
@@ -399,7 +418,8 @@ scan_store() {
       # should stay quiet on a default run, and a settled memory is not a
       # defect. It is only interesting when the index is being trimmed.
       if [ "$CURATE" -eq 1 ] && [ "$settled" -eq 1 ] && [ "$mtype" = "project" ] \
-         && ! grep -qiE "$OPEN_RE" "$f" 2>/dev/null; then
+         && ! grep -qiE "$OPEN_RE" "$f" 2>/dev/null \
+         && ! archived_already "$dir" "$base"; then
         if [ "$recorded_only" -eq 1 ]; then
           emit SETTLED "$slug" "$base" "every claim is terminal per the RECORDED evidence and nothing is in flight — the index line can move to the archive section"
         else

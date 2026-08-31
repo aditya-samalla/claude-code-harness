@@ -526,5 +526,39 @@ run --curate >/dev/null 2>&1
 SUM_AFTER=$(cat "$STORE"/*.md | shasum | awk '{print $1}')
 check_eq "memories are byte-identical after a curate run" "$SUM_BEFORE" "$SUM_AFTER"
 
+echo ""
+echo "=== SETTLED is not re-flagged once the index line is already archived ==="
+# The finding's whole advice is "the index line can move to the archive
+# section". For a line already sitting there it is vacuous, and it costs a
+# reader the detour of opening the memory to find that out. Measured on a real
+# store: all 7 SETTLED findings on one run were already archived.
+rm -f "$STORE"/*.md
+mem done_work.md 40 "verify:" "  - gh acme/api#4821 merged" "" "The idle-timeout fix landed."
+check_contains "flagged while the line is still in the index" "SETTLED" "$(run --curate)"
+printf '%s\n' "# Memory archive" "- [Done work](done_work.md) — the idle-timeout fix" > "$STORE/MEMORY_ARCHIVE.md"
+check_absent   "silent once the line is archived"             "SETTLED" "$(run --curate)"
+
+echo ""
+echo "=== but an archive that does not list it still leaves it flagged ==="
+# Guards the helper against matching the archive as a whole rather than the
+# memory: an unrelated archived line must not silence every SETTLED finding.
+printf '%s\n' "# Memory archive" "- [Something else](other_thing.md) — unrelated" > "$STORE/MEMORY_ARCHIVE.md"
+check_contains "still flagged" "SETTLED" "$(run --curate)"
+
+echo ""
+echo "=== neither index is scanned as if it were a memory ==="
+# MEMORY_ARCHIVE.md holds index lines whose hooks quote the memories they point
+# at. Scanning it re-reports their claims against a file with no frontmatter, no
+# type and no verify block. The old guard named ARCHIVE.md, which never existed.
+rm -f "$STORE"/*.md
+mem real.md 40 "verify:" "  - gh acme/api#4821 merged" "" "Landed."
+printf '%s\n' "# Memory archive" \
+  "- [Old thing](old_thing.md) — still open, awaiting review, blocked on the rollout" \
+  > "$STORE/MEMORY_ARCHIVE.md"
+OUT=$(run --curate)
+check_absent "no finding names the archive"  "MEMORY_ARCHIVE.md" "$OUT"
+check_absent "and none names ARCHIVE.md"     " ARCHIVE.md"       "$OUT"
+rm -f "$STORE"/MEMORY_ARCHIVE.md
+
 echo "--- Results: $PASS passed, $FAIL failed"
 exit "$FAIL"

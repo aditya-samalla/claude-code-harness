@@ -52,7 +52,20 @@
 #                 24 hours, so the index is permanently at its cap and the tail
 #                 is permanently being dropped - the only question left is
 #                 whether anything says so. Never peels ACTIVE, feedback or
-#                 untyped entries: those are above the cut by design.
+#                 untyped entries: those are above the cut by design, and never
+#                 an entry newer than the age floor below.
+#   --min-age-days N
+#                 age floor for --archive-overflow (default 2, 0 disables):
+#                 never peel an entry whose memory was modified in the last N
+#                 days. Tier cheapness is an INDIRECT proxy for "least costly to
+#                 lose" and it breaks down when a tier is nearly empty: measured
+#                 on two consecutive days, the drain took a `project` memory
+#                 written that same morning - the freshest and most actionable
+#                 entry in the store - because project is the cheapest tier and
+#                 that memory was the only thing in it. Recency is a DIRECT
+#                 signal, so it overrides the proxy. If the floor blocks every
+#                 remaining candidate the drain stops short and says so, rather
+#                 than peeling live work to satisfy a number.
 #
 # Exit: 0 already ordered (or written) · 1 out of order · 3 could not run
 #
@@ -74,13 +87,17 @@ INDEX_MAX_BYTES="${MEMORY_INDEX_MAX_CHARS:-25000}"
 # what keeps the index compliant BETWEEN runs.
 INDEX_ARCHIVE_MARGIN="${MEMORY_INDEX_ARCHIVE_MARGIN:-15}"
 INDEX_ARCHIVE_MARGIN_BYTES="${MEMORY_INDEX_ARCHIVE_MARGIN_BYTES:-1500}"
+# Never peel a memory modified within this many days. See --min-age-days above:
+# the tier is a proxy for cost-of-loss and a nearly-empty tier defeats it.
+INDEX_ARCHIVE_MIN_AGE_DAYS="${MEMORY_INDEX_ARCHIVE_MIN_AGE_DAYS:-2}"
 
 while [ $# -gt 0 ]; do
   case "$1" in
     --store) ONLY_STORE="${2:-}"; shift 2 ;;
     --write) WRITE=1; shift ;;
     --archive-overflow) ARCHIVE_OVERFLOW=1; WRITE=1; shift ;;
-    -h|--help) sed -n '2,35p' "$0"; exit 0 ;;
+    --min-age-days) INDEX_ARCHIVE_MIN_AGE_DAYS="${2:-}"; shift 2 ;;
+    -h|--help) sed -n '2,70p' "$0"; exit 0 ;;
     *) echo "unknown argument: $1" >&2; exit 3 ;;
   esac
 done
@@ -108,6 +125,28 @@ TAB=$(printf '\t')
 # handful of busy days, most entries are ties. The sequence number is therefore
 # an explicit ascending tiebreak against a descending date key.
 sort_newest_first() { sort -t"$TAB" -k1,1r -k2,2n "$1" | cut -f3-; }
+
+# The `modified:` date of the memory an index line points at, read exactly as the
+# sort key is so the two can never disagree. Fails when the line names no
+# resolvable file - an untyped or broken entry is never a peel candidate anyway.
+entry_mdate() {  # entry_mdate <dir> <index-line>
+  local d="$1" line="$2" f m
+  f=$(printf '%s\n' "$line" | sed -n 's/.*](\([^)]*\)).*/\1/p')
+  [ -n "$f" ] && [ -f "$d/$f" ] || return 1
+  m=$(sed -n 's/^[[:space:]]*modified:[[:space:]]*\([0-9-]*\).*/\1/p' "$d/$f" | head -1)
+  [ -n "$m" ] || m=$(date -r "$d/$f" +%Y-%m-%d 2>/dev/null || echo 0000-00-00)
+  printf '%s\n' "$m"
+}
+
+# Oldest date still counted as "recent". Portable across BSD (macOS) and GNU.
+# Empty means the floor is off, so every comparison against it is skipped.
+AGE_CUTOFF=""
+case "$INDEX_ARCHIVE_MIN_AGE_DAYS" in
+  ''|0|*[!0-9]*) : ;;
+  *) AGE_CUTOFF=$(date -v-"${INDEX_ARCHIVE_MIN_AGE_DAYS}"d +%Y-%m-%d 2>/dev/null \
+               || date -d "${INDEX_ARCHIVE_MIN_AGE_DAYS} days ago" +%Y-%m-%d 2>/dev/null \
+               || echo "") ;;
+esac
 
 TMP="${TMPDIR:-/tmp}/memory-index.$$"
 mkdir -p "$TMP" || exit 3
@@ -216,6 +255,7 @@ for dir in "$PROJECTS"/*/memory; do
     # Bounded on purpose. Every iteration appends to a file the user keeps, so
     # a loop that failed to shrink would grow the archive without limit; one
     # pass per entry is strictly more than it can ever need.
+    blocked_by_age=0
     guard=$(( $(wc -l < "$TMP/ref.s" | tr -d ' ') + $(wc -l < "$TMP/prj.s" | tr -d ' ') + 1 ))
     while [ "$over" -eq 1 ] && [ "$guard" -gt 0 ]; do
       guard=$((guard-1))
@@ -225,13 +265,34 @@ for dir in "$PROJECTS"/*/memory; do
       # Cheapest end first. Both lists are newest-first, so their LAST line is
       # the oldest entry of that type - the same line truncation would take,
       # except that here it is written down instead of vanishing.
-      if   [ -s "$TMP/prj.s" ]; then src="$TMP/prj.s"
-      elif [ -s "$TMP/ref.s" ]; then src="$TMP/ref.s"
-      else break; fi
+      #
+      # The age floor overrides that order. Because each list is newest-first
+      # its tail is the OLDEST of its tier, so if even the tail is inside the
+      # floor then every entry in that tier is: skipping the whole tier is
+      # exactly right, not an approximation.
+      src=""
+      for cand in "$TMP/prj.s" "$TMP/ref.s"; do
+        [ -s "$cand" ] || continue
+        if [ -n "$AGE_CUTOFF" ]; then
+          cdate=$(entry_mdate "$dir" "$(tail -1 "$cand")" 2>/dev/null || echo "")
+          if [ -n "$cdate" ] && [ "$cdate" \> "$AGE_CUTOFF" ]; then
+            blocked_by_age=1
+            continue
+          fi
+        fi
+        src="$cand"; break
+      done
+      [ -n "$src" ] || break
       tail -1 "$src" >> "$TMP/peeled"
       sed '$d' "$src" > "$TMP/pop" && mv "$TMP/pop" "$src"
       emit_index "$TMP/ref.s" "$TMP/prj.s" > "$TMP/new"
     done
+    # Say so rather than leaving a silently-short drain to look like a full one.
+    if [ "$blocked_by_age" -eq 1 ] \
+       && { [ "$(wc -l < "$TMP/new" | tr -d ' ')" -gt "$tgt_l" ] \
+            || [ "$(wc -c < "$TMP/new" | tr -d ' ')" -gt "$tgt_b" ]; }; then
+      echo "$slug: drain stopped short of the target — every remaining candidate is newer than ${INDEX_ARCHIVE_MIN_AGE_DAYS}d (age floor); index left at $(wc -l < "$TMP/new" | tr -d ' ') lines" >&2
+    fi
   fi
 
   # Abort before writing anything if this is not a pure permutation.

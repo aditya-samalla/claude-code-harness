@@ -27,7 +27,9 @@ re-deriving them wastes a session:
    If it is genuinely over budget, `--archive-overflow` moves the cheapest end
    into `MEMORY_ARCHIVE.md` mechanically and leaves a pointer. Use it for the
    bulk, and spend your judgement on what deserves promoting UP into the ACTIVE
-   block — the decision a tool cannot make.
+   block — the decision a tool cannot make. It refuses to peel anything modified
+   in the last 2 days (`--min-age-days`), because the cheapest TIER is not the
+   cheapest ENTRY when that tier holds one memory written this morning.
 
 ## Before you begin
 

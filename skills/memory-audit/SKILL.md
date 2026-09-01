@@ -206,6 +206,16 @@ to take anyway. Measured: a store growing ~14 memories a day cannot hold any
 fixed headroom, so the index is permanently at its cap and the only question
 is whether the loss is recorded. See `MEMORY-HYGIENE-PROBLEMS.md`.
 
+It will not peel an entry whose memory was modified in the last 2 days
+(`--min-age-days N`, 0 disables). Tier cheapness is an INDIRECT proxy for
+cost-of-loss and it breaks down when a tier is nearly empty: measured on two
+consecutive days, the drain took a `project` memory written that same morning —
+the freshest, most actionable entry in the store — because project is the
+cheapest tier and that memory was the only thing in it. If the floor blocks
+every remaining candidate the drain stops short and says so on stderr, rather
+than peeling live work to satisfy a number.
+
+
 Only then look at shedding entries. `--curate` reports pairs of memories making
 the same claims:
 

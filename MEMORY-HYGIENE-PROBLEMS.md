@@ -81,6 +81,16 @@ them down. The comparison is not "archive vs. keep", which would need
 judgement; it is "recorded vs. silent", which does not. Nothing is deleted, the
 memory file stays on disk, and the index keeps a pointer.
 
+**One correction, measured after the fact.** "The lines the loader would have
+dropped anyway" was true of the ORDER but not of the OUTCOME, because tier
+cheapness is a proxy that fails when a tier is nearly empty. On two consecutive
+days the drain peeled a `project` memory written that same morning — the only
+entry in its tier, and the most actionable line in the store. The archiver now
+carries an age floor (`--min-age-days`, default 2) and stops short with a message
+rather than peeling recent work. Recency is a direct signal where tier is an
+indirect one; this does not restore a worth heuristic, it just stops the proxy
+being applied where it is known to break.
+
 It is also opt-in: without the flag the tool still only reports, so the
 standing principle holds by default. And it does not claim to solve the size
 problem - see below, it cannot be solved. It makes running out of room
